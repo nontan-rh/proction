@@ -30,38 +30,39 @@ type HandleSet<T> = {
 type ActionID = Brand<number, "actionID">;
 type Action<I, O> = {
   id: ActionID;
-  f: (inputs: I) => O;
-  d: (plan: Plan, inputs: HandleSet<I>) => HandleSet<O>;
+  f: (inputSet: I) => O;
+  d: (plan: Plan, inputSet: HandleSet<I>) => HandleSet<O>;
 };
 type UntypedAction = {
   id: ActionID;
-  f: (inputs: unknown) => unknown;
-  d: (plan: Plan, inputs: unknown) => unknown;
+  f: (inputSet: unknown) => unknown;
+  d: (plan: Plan, inputSet: unknown) => unknown;
 };
 
 function createAction<I, O>(
   ctx: Context,
-  f: (inputs: I) => O,
-  o: O,
+  f: (inputSet: I) => O,
+  _i: ParamSpecSet<I>,
+  o: ParamSpecSet<O>,
 ): Action<I, O> {
   const actionID = ctx.generateActionID();
-  const d = (plan: Plan, inputs: HandleSet<I>): HandleSet<O> => {
+  const d = (plan: Plan, inputSet: HandleSet<I>): HandleSet<O> => {
     const partialOutputs: Partial<HandleSet<O>> = {};
     for (const key in o) {
       partialOutputs[key] = plan.generateHandle() as HandleSet<O>[typeof key];
     }
-    const outputs = partialOutputs as HandleSet<O>;
+    const outputSet = partialOutputs as HandleSet<O>;
 
     const invocationID = plan.generateInvocationID();
     const invocation: Invocation = {
       id: invocationID,
       actionID,
-      inputs,
-      outputs,
+      inputSet,
+      outputSet,
     };
     plan.invocations.set(invocation.id, invocation);
 
-    return outputs;
+    return outputSet;
   };
 
   return {
@@ -75,8 +76,8 @@ type InvocationID = Brand<number, "invocationID">;
 type Invocation = {
   id: InvocationID;
   actionID: ActionID;
-  inputs: Record<ObjectKey, UntypedHandle>;
-  outputs: Record<ObjectKey, UntypedHandle>;
+  inputSet: Record<ObjectKey, UntypedHandle>;
+  outputSet: Record<ObjectKey, UntypedHandle>;
 };
 
 export class Context {
@@ -109,17 +110,29 @@ type Datum = {
   value: unknown;
 };
 
+export type ParamSpecSet<T> = {
+  [key in keyof T]: ParamSpec<T>;
+};
+
+export type ParamSpec<T> = {
+  type: "immediate";
+};
+
 export function deferred<I, O>(
   ctx: Context,
-  f: (inputs: I) => O,
-  o: O,
-): (plan: Plan, inputs: HandleSet<I>) => HandleSet<O> {
+  f: (inputSet: I) => O,
+  i: ParamSpecSet<I>,
+  o: ParamSpecSet<O>,
+): (plan: Plan, inputSet: HandleSet<I>) => HandleSet<O> {
   const cachedAction = ctx.funcToActions.get(f);
   if (cachedAction != null) {
-    return cachedAction.d as (plan: Plan, inputs: HandleSet<I>) => HandleSet<O>;
+    return cachedAction.d as (
+      plan: Plan,
+      inputSet: HandleSet<I>,
+    ) => HandleSet<O>;
   }
 
-  const action = createAction(ctx, f, o);
+  const action = createAction(ctx, f, i, o);
   ctx.funcToActions.set(f, action as UntypedAction);
   ctx.actions.set(action.id, action as UntypedAction);
   return action.d;
@@ -152,9 +165,9 @@ export function run<T>(plan: Plan, globalOutputs: HandleSet<T>): T {
         throw new DeferCalcLogicError("action not found");
       }
 
-      const reifiedInputs = restoreSet(plan, invocation.inputs);
+      const reifiedInputs = restoreSet(plan, invocation.inputSet);
       const reifiedOutputs = action.f(reifiedInputs);
-      saveSet(plan, invocation.outputs, reifiedOutputs);
+      saveSet(plan, invocation.outputSet, reifiedOutputs);
     }
 
     const result = restoreSet(plan, globalOutputs);
@@ -179,8 +192,8 @@ function toposortInvocations<T>(
 
   const outputToInvocation = new Map<UntypedHandle, Invocation>();
   for (const invocation of plan.invocations.values()) {
-    for (const outputKey in invocation.outputs) {
-      const output = invocation.outputs[outputKey];
+    for (const outputKey in invocation.outputSet) {
+      const output = invocation.outputSet[outputKey];
       if (outputToInvocation.has(output)) {
         throw new DeferCalcLogicError("the output have two parent invocations");
       }
@@ -201,8 +214,8 @@ function toposortInvocations<T>(
 
     visitedInvocations.set(invocationID, "temporary");
 
-    for (const inputKey in invocation.inputs) {
-      visitHandle(invocation.inputs[inputKey]);
+    for (const inputKey in invocation.inputSet) {
+      visitHandle(invocation.inputSet[inputKey]);
     }
 
     visitedInvocations.set(invocationID, "permanent");

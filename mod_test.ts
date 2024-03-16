@@ -11,7 +11,8 @@ Deno.test(function calcTest() {
     ): { result: number } => ({
       result: x + y,
     }),
-    { result: 1 },
+    { x: { type: "immediate" }, y: { type: "immediate" } },
+    { result: { type: "immediate" } },
   );
   const deferredMul = deferred(
     ctx,
@@ -20,7 +21,8 @@ Deno.test(function calcTest() {
     ): { result: number } => ({
       result: x * y,
     }),
-    { result: 1 },
+    { x: { type: "immediate" }, y: { type: "immediate" } },
+    { result: { type: "immediate" } },
   );
 
   const plan = new Plan(ctx);
