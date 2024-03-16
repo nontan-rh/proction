@@ -118,7 +118,7 @@ export type ParamSpec<T> = {
   type: "immediate";
 };
 
-export function deferred<I, O>(
+export function action<I, O>(
   ctx: Context,
   f: (inputSet: I) => O,
   i: ParamSpecSet<I>,
