@@ -1,11 +1,7 @@
-const brandKey = Symbol("brand");
-type Brand<K, T> = K & { [brandKey]: T };
+import { SubFunError, SubFunLogicError } from "./error.ts";
+import { Brand } from "./brand.ts";
 
 type ObjectKey = string | number | symbol;
-
-class DeferCalcError extends Error {}
-
-class DeferCalcLogicError extends DeferCalcError {}
 
 function idGenerator<T>(transform: (x: number) => T): () => T {
   let counter = 0;
@@ -146,7 +142,7 @@ export function input<T>(plan: Plan, value: T): Handle<T> {
 
 export function run<T>(plan: Plan, globalOutputs: HandleSet<T>): T {
   if (plan.state !== "initial") {
-    throw new DeferCalcError(
+    throw new SubFunError(
       `invalid state precondition for run(): ${plan.state}`,
     );
   }
@@ -162,7 +158,7 @@ export function run<T>(plan: Plan, globalOutputs: HandleSet<T>): T {
       const invocation = invocations[i];
       const action = plan.ctx.actions.get(invocation.actionID);
       if (action == null) {
-        throw new DeferCalcLogicError("action not found");
+        throw new SubFunLogicError("action not found");
       }
 
       const reifiedInputs = restoreSet(plan, invocation.inputSet);
@@ -195,7 +191,7 @@ function toposortInvocations<T>(
     for (const outputKey in invocation.outputSet) {
       const output = invocation.outputSet[outputKey];
       if (outputToInvocation.has(output)) {
-        throw new DeferCalcLogicError("the output have two parent invocations");
+        throw new SubFunLogicError("the output have two parent invocations");
       }
       outputToInvocation.set(output, invocation);
     }
@@ -209,7 +205,7 @@ function toposortInvocations<T>(
     if (state === "permanent") {
       return;
     } else if (state === "temporary") {
-      throw new DeferCalcLogicError("the computation graph has a cycle");
+      throw new SubFunLogicError("the computation graph has a cycle");
     }
 
     visitedInvocations.set(invocationID, "temporary");
@@ -230,7 +226,7 @@ function toposortInvocations<T>(
 
     const parentInvocation = outputToInvocation.get(handle);
     if (parentInvocation == null) {
-      throw new DeferCalcLogicError(
+      throw new SubFunLogicError(
         `parent invocation not found for handle: ${handle.value}`,
       );
     }
@@ -246,17 +242,17 @@ function toposortInvocations<T>(
 }
 
 function restoreSet<T>(plan: Plan, handleSet: HandleSet<T>): T {
-  const partialReifiedSet: Partial<T> = {};
+  const partialRestored: Partial<T> = {};
   for (const key in handleSet) {
-    partialReifiedSet[key] = restore(plan, handleSet[key]);
+    partialRestored[key] = restore(plan, handleSet[key]);
   }
-  return partialReifiedSet as T;
+  return partialRestored as T;
 }
 
 function restore<T>(plan: Plan, handle: Handle<T>): T {
   const datum = plan.data.get(handle);
   if (datum == null) {
-    throw new DeferCalcLogicError(
+    throw new SubFunLogicError(
       `datum not saved for handle: ${handle.value}`,
     );
   }
@@ -272,7 +268,7 @@ function saveSet<T>(plan: Plan, handleSet: HandleSet<T>, valueSet: T) {
 
 function save<T>(plan: Plan, handle: Handle<T>, value: T) {
   if (plan.data.has(handle)) {
-    throw new DeferCalcLogicError(
+    throw new SubFunLogicError(
       `datum is already saved for handle: ${handle.value}`,
     );
   }
