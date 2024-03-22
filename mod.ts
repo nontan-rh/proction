@@ -1,5 +1,6 @@
 import { SubFunError, SubFunLogicError } from "./error.ts";
 import { Brand } from "./brand.ts";
+import { Provider } from "./provider.ts";
 
 type ObjectKey = string | number | symbol;
 
