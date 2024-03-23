@@ -1,6 +1,8 @@
 import { SubFunError, SubFunLogicError } from "./error.ts";
 import { Brand } from "./brand.ts";
 import { Provider } from "./provider.ts";
+import { Box } from "./box.ts";
+import { Rc } from "./rc.ts";
 
 type ObjectKey = string | number | symbol;
 
@@ -23,23 +25,24 @@ type UntypedHandleSet<T> = {
 type HandleSet<T> = {
   [key in keyof T]: Handle<T[key]>;
 };
+type GlobalOutputSet<T> = {
+  [key in keyof T]: { handle: Handle<T[key]>; body: T[key] };
+};
 
 type ActionID = Brand<number, "actionID">;
 type Action<I, O> = {
   id: ActionID;
-  f: (inputSet: I) => O;
+  f: (inputSet: I, outputSet: O) => void;
   d: (plan: Plan, inputSet: HandleSet<I>) => HandleSet<O>;
+  i: ParamSpecSet<I>;
+  o: ParamSpecSet<O>;
 };
-type UntypedAction = {
-  id: ActionID;
-  f: (inputSet: unknown) => unknown;
-  d: (plan: Plan, inputSet: unknown) => unknown;
-};
+type UntypedAction = Action<unknown, unknown>;
 
 function createAction<I, O>(
   ctx: Context,
-  f: (inputSet: I) => O,
-  _i: ParamSpecSet<I>,
+  f: (inputSet: I, outputSet: O) => void,
+  i: ParamSpecSet<I>,
   o: ParamSpecSet<O>,
 ): Action<I, O> {
   const actionID = ctx.generateActionID();
@@ -66,6 +69,8 @@ function createAction<I, O>(
     id: actionID,
     f,
     d,
+    i,
+    o,
   };
 }
 
@@ -90,7 +95,7 @@ export class Plan {
 
   generateHandle = idGenerator((value) => ({ value } as UntypedHandle));
 
-  data = new Map<UntypedHandle, Datum>();
+  dataSlots = new Map<UntypedHandle, DataSlot>();
 
   generateInvocationID = idGenerator((value) => value as InvocationID);
   invocations = new Map<InvocationID, Invocation>();
@@ -103,23 +108,33 @@ export class Plan {
 
 type PlanState = "initial" | "planning" | "running" | "done" | "error";
 
-type Datum = {
-  value: unknown;
+type DataSlot =
+  | GlobalInputSlot
+  | IntermediateSlot
+  | GlobalOutputSlot
+  | StubOutputSlot;
+type GlobalInputSlot = { type: "global-input"; body: unknown };
+type IntermediateSlot = { type: "intermediate"; body: Rc<Box<unknown>> };
+type GlobalOutputSlot = { type: "global-output"; body: unknown };
+type StubOutputSlot = { type: "stub-output" };
+
+export type TypeSpec<T> = {
+  provider: Provider<T>;
 };
 
 export type ParamSpecSet<T> = {
-  [key in keyof T]: ParamSpec<T>;
+  [key in keyof T]: ParamSpec<T[key]>;
 };
 
 export type ParamSpec<T> = {
-  type: "immediate";
+  type: TypeSpec<T>;
 };
 
 export function action<I, O>(
   ctx: Context,
-  f: (inputSet: I) => O,
   i: ParamSpecSet<I>,
   o: ParamSpecSet<O>,
+  f: (inputSet: I, outputSet: O) => void,
 ): (plan: Plan, inputSet: HandleSet<I>) => HandleSet<O> {
   const cachedAction = ctx.funcToActions.get(f);
   if (cachedAction != null) {
@@ -137,11 +152,11 @@ export function action<I, O>(
 
 export function input<T>(plan: Plan, value: T): Handle<T> {
   const handle = plan.generateHandle();
-  plan.data.set(handle, { value });
+  plan.dataSlots.set(handle, { type: "global-input", body: value });
   return handle as Handle<T>;
 }
 
-export function run<T>(plan: Plan, globalOutputs: HandleSet<T>): T {
+export function run<T>(plan: Plan, globalOutputSet: GlobalOutputSet<T>): void {
   if (plan.state !== "initial") {
     throw new SubFunError(
       `invalid state precondition for run(): ${plan.state}`,
@@ -151,7 +166,8 @@ export function run<T>(plan: Plan, globalOutputs: HandleSet<T>): T {
   try {
     plan.state = "planning";
 
-    const invocations = toposortInvocations(plan, globalOutputs);
+    const invocations = prepareInvocations(plan, globalOutputSet);
+    prepareDataSlots(plan, globalOutputSet, invocations);
 
     plan.state = "running";
 
@@ -163,15 +179,21 @@ export function run<T>(plan: Plan, globalOutputs: HandleSet<T>): T {
       }
 
       const reifiedInputs = restoreSet(plan, invocation.inputSet);
-      const reifiedOutputs = action.f(reifiedInputs);
-      saveSet(plan, invocation.outputSet, reifiedOutputs);
+      const cleanupList: (() => void)[] = [];
+      const reifiedOutputs = prepareOutputSet(
+        plan,
+        action.o,
+        invocation.outputSet,
+        cleanupList,
+      );
+      action.f(reifiedInputs, reifiedOutputs);
+      decRefSet(plan, invocation.inputSet);
+      for (const cleanup of cleanupList) {
+        cleanup();
+      }
     }
 
-    const result = restoreSet(plan, globalOutputs);
-
     plan.state = "done";
-
-    return result;
   } finally {
     if (plan.state !== "done") {
       plan.state = "error";
@@ -179,9 +201,9 @@ export function run<T>(plan: Plan, globalOutputs: HandleSet<T>): T {
   }
 }
 
-function toposortInvocations<T>(
+function prepareInvocations<T>(
   plan: Plan,
-  globalOutputs: HandleSet<T>,
+  globalOutputSet: GlobalOutputSet<T>,
 ): Invocation[] {
   type ToposortState = "temporary" | "permanent";
 
@@ -221,7 +243,7 @@ function toposortInvocations<T>(
   }
 
   function visitHandle(handle: UntypedHandle) {
-    if (plan.data.has(handle)) {
+    if (plan.dataSlots.has(handle)) {
       return;
     }
 
@@ -235,11 +257,101 @@ function toposortInvocations<T>(
     visitInvocation(parentInvocation);
   }
 
-  for (const globalOutputKey in globalOutputs) {
-    visitHandle(globalOutputs[globalOutputKey]);
+  for (const globalOutputKey in globalOutputSet) {
+    const globalOutput = globalOutputSet[globalOutputKey];
+    visitHandle(globalOutput.handle);
   }
 
   return result;
+}
+
+function prepareDataSlots<T>(
+  plan: Plan,
+  globalOutputSet: GlobalOutputSet<T>,
+  invocations: Invocation[],
+) {
+  // prepare output
+  for (const globalOutputKey in globalOutputSet) {
+    const globalOutput = globalOutputSet[globalOutputKey];
+
+    const dataSlot = plan.dataSlots.get(globalOutput.handle);
+    if (dataSlot != null) {
+      const type = dataSlot.type;
+      switch (type) {
+        case "global-input":
+          throw new SubFunError(`input handle is also specified as output`);
+        case "intermediate":
+          throw new SubFunLogicError(`unexpected data slot type: ${type}`);
+        case "global-output":
+          throw new SubFunError("output data slot collision");
+        case "stub-output":
+          throw new SubFunLogicError(`unexpected data slot type: ${type}`);
+        default:
+          throw new SubFunLogicError(`unknown data slot type: ${type}`);
+      }
+    }
+    plan.dataSlots.set(globalOutput.handle, {
+      type: "global-output",
+      body: globalOutput.body,
+    });
+  }
+
+  // prepare intermediate inputs
+  for (const invocation of invocations) {
+    for (const inputKey in invocation.inputSet) {
+      const action = plan.ctx.actions.get(invocation.actionID);
+      if (action == null) {
+        throw new SubFunLogicError("action not found");
+      }
+
+      const input = invocation.inputSet[inputKey];
+      const dataSlot = plan.dataSlots.get(input);
+      if (dataSlot != null) {
+        const type = dataSlot.type;
+        switch (type) {
+          case "global-input":
+            break;
+          case "intermediate":
+            dataSlot.body.incRef();
+            break;
+          case "global-output":
+            break;
+          case "stub-output":
+            throw new SubFunLogicError(`unexpected data slot type: ${type}`);
+          default:
+            throw new SubFunLogicError(`unknown data slot type: ${type}`);
+        }
+      } else {
+        plan.dataSlots.set(input, {
+          type: "intermediate",
+          body: new Rc(new Box(), (x) => {
+            if (!x.isSet) {
+              return;
+            }
+            const paramSpec =
+              (action.i as Record<ObjectKey, ParamSpec<unknown>>)[inputKey]; // note: very loose type casting
+            paramSpec.type.provider.release(x.value);
+          }, console.error),
+        });
+      }
+    }
+  }
+
+  // prepare intermediate outputs
+  for (const invocation of invocations) {
+    for (const outputKey in invocation.outputSet) {
+      const action = plan.ctx.actions.get(invocation.actionID);
+      if (action == null) {
+        throw new SubFunLogicError("action not found");
+      }
+
+      const output = invocation.outputSet[outputKey];
+      const dataSlot = plan.dataSlots.get(output);
+      if (dataSlot == null) {
+        plan.dataSlots.set(output, { type: "stub-output" });
+      }
+    }
+  }
 }
 
 function restoreSet<T>(plan: Plan, handleSet: HandleSet<T>): T {
@@ -251,28 +363,120 @@ function restoreSet<T>(plan: Plan, handleSet: HandleSet<T>): T {
 }
 
 function restore<T>(plan: Plan, handle: Handle<T>): T {
-  const datum = plan.data.get(handle);
-  if (datum == null) {
+  const dataSlot = plan.dataSlots.get(handle);
+  if (dataSlot == null) {
     throw new SubFunLogicError(
       `datum not saved for handle: ${handle.value}`,
     );
   }
 
-  return datum.value as T;
-}
-
-function saveSet<T>(plan: Plan, handleSet: HandleSet<T>, valueSet: T) {
-  for (const key in handleSet) {
-    save(plan, handleSet[key], valueSet[key]);
+  const type = dataSlot.type;
+  switch (type) {
+    case "global-input": {
+      const body = dataSlot.body;
+      return body as T;
+    }
+    case "intermediate":
+      if (!dataSlot.body.body.isSet) {
+        throw new SubFunLogicError("data slot is not set yet");
+      }
+      return dataSlot.body.body.value as T;
+    case "global-output": {
+      const body = dataSlot.body;
+      return body as T;
+    }
+    case "stub-output":
+      throw new SubFunLogicError(`unexpected data slot type: ${type}`);
+    default:
+      throw new SubFunLogicError(`unknown data slot type: ${type}`);
   }
 }
 
-function save<T>(plan: Plan, handle: Handle<T>, value: T) {
-  if (plan.data.has(handle)) {
+function decRefSet<T>(plan: Plan, handleSet: HandleSet<T>) {
+  for (const key in handleSet) {
+    decRef(plan, handleSet[key]);
+  }
+}
+
+function decRef<T>(plan: Plan, handle: Handle<T>) {
+  const dataSlot = plan.dataSlots.get(handle);
+  if (dataSlot == null) {
     throw new SubFunLogicError(
-      `datum is already saved for handle: ${handle.value}`,
+      `data slot not saved for handle: ${handle.value}`,
     );
   }
 
-  plan.data.set(handle, { value });
+  const type = dataSlot.type;
+  switch (type) {
+    case "global-input":
+      break;
+    case "intermediate":
+      dataSlot.body.decRef();
+      break;
+    case "global-output":
+      break;
+    case "stub-output":
+      throw new SubFunLogicError(`unexpected data slot type: ${type}`);
+    default:
+      throw new SubFunLogicError(`unknown data slot type: ${type}`);
+  }
+}
+
+function prepareOutputSet<T>(
+  plan: Plan,
+  paramSpecSet: ParamSpecSet<T>,
+  handleSet: HandleSet<T>,
+  cleanupList: (() => void)[],
+): T {
+  const partialPrepared: Partial<T> = {};
+  for (const key in handleSet) {
+    partialPrepared[key] = prepareOutput(
+      plan,
+      paramSpecSet,
+      handleSet,
+      key,
+      cleanupList,
+    );
+  }
+  return partialPrepared as T;
+}
+
+function prepareOutput<T, K extends keyof T>(
+  plan: Plan,
+  paramSpecSet: ParamSpecSet<T>,
+  handleSet: HandleSet<T>,
+  key: K,
+  cleanupList: (() => void)[],
+): T[K] {
+  const handle = handleSet[key];
+  const dataSlot = plan.dataSlots.get(handle);
+  if (dataSlot == null) {
+    throw new SubFunLogicError("data slot not found");
+  }
+
+  const type = dataSlot.type;
+  switch (type) {
+    case "global-input":
+      throw new SubFunLogicError(`unexpected data slot type: ${type}`);
+    case "intermediate": {
+      if (dataSlot.body.body.isSet) {
+        throw new SubFunLogicError("data slot is already set");
+      }
+      const body = paramSpecSet[key].type.provider.acquire();
+      dataSlot.body.body.value = body;
+      return body;
+    }
+    case "global-output": {
+      const body = dataSlot.body;
+      return body as T[K];
+    }
+    case "stub-output": {
+      const provider = paramSpecSet[key].type.provider;
+      const body = provider.acquire();
+      cleanupList.push(() => provider.release(body));
+      return body;
+    }
+    default:
+      throw new SubFunLogicError(`unknown data slot type: ${type}`);
+  }
 }

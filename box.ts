@@ -3,6 +3,12 @@ import { SubFunLogicError } from "./error.ts";
 export class Box<T> {
   #value: [T] | [] = [];
 
+  static withValue<T>(value: T): Box<T> {
+    const box = new Box<T>();
+    box.value = value;
+    return box;
+  }
+
   get value(): T {
     const v = this.#value;
     if (v.length === 0) {
