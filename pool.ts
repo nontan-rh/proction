@@ -7,6 +7,9 @@ export class Pool<T> implements Provider<T> {
   #pooledCells: { body: T }[] = [];
   #vacantCells: { body: T }[] = [];
   #taintedCells: { body: T }[] = [];
+  #pooledCount = 0;
+  #acquiredCount = 0;
+  #taintedCount = 0;
 
   constructor(
     create: () => T,
@@ -18,14 +21,30 @@ export class Pool<T> implements Provider<T> {
     this.#reportError = errorReport;
   }
 
+  get pooledCount(): number {
+    return this.#pooledCount;
+  }
+
+  get acquiredCount(): number {
+    return this.#acquiredCount;
+  }
+
+  get taintedCount(): number {
+    return this.#taintedCount;
+  }
+
   acquire(): T {
     const pooledCell = this.#pooledCells.pop();
     if (pooledCell == null) {
-      return this.#create();
+      const body = this.#create();
+      this.#acquiredCount++;
+      return body;
     }
 
     const body = pooledCell.body;
     this.#releaseCell(pooledCell);
+    this.#pooledCount--;
+    this.#acquiredCount++;
     return body;
   }
 
@@ -41,11 +60,15 @@ export class Pool<T> implements Provider<T> {
 
       const taintedCell = this.#acquireCell(x);
       this.#taintedCells.push(taintedCell);
+      this.#acquiredCount--;
+      this.#taintedCount++;
       return;
     }
 
     const pooledCell = this.#acquireCell(x);
     this.#pooledCells.push(pooledCell);
+    this.#acquiredCount--;
+    this.#pooledCount++;
   }
 
   #acquireCell(x: T): { body: T } {

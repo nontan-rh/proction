@@ -1,4 +1,8 @@
-import { SubFunError, SubFunLogicError } from "./error.ts";
+import {
+  SubFunAssertionError,
+  SubFunError,
+  SubFunLogicError,
+} from "./error.ts";
 import { Brand } from "./brand.ts";
 import { Provider } from "./provider.ts";
 import { Box } from "./box.ts";
@@ -94,7 +98,6 @@ export class Plan {
   state: PlanState;
 
   generateHandle = idGenerator((value) => ({ value } as UntypedHandle));
-
   dataSlots = new Map<UntypedHandle, DataSlot>();
 
   generateInvocationID = idGenerator((value) => value as InvocationID);
@@ -156,7 +159,21 @@ export function input<T>(plan: Plan, value: T): Handle<T> {
   return handle as Handle<T>;
 }
 
-export function run<T>(plan: Plan, globalOutputSet: GlobalOutputSet<T>): void {
+type RunOptions = {
+  assertNoLeak: boolean;
+};
+
+const defaultRunOptions: RunOptions = {
+  assertNoLeak: false,
+};
+
+export function run<T>(
+  plan: Plan,
+  globalOutputSet: GlobalOutputSet<T>,
+  options?: Partial<RunOptions>,
+): void {
+  const fixedOptions = { ...defaultRunOptions, ...options };
+
   if (plan.state !== "initial") {
     throw new SubFunError(
       `invalid state precondition for run(): ${plan.state}`,
@@ -178,19 +195,23 @@ export function run<T>(plan: Plan, globalOutputSet: GlobalOutputSet<T>): void {
         throw new SubFunLogicError("action not found");
       }
 
-      const reifiedInputs = restoreSet(plan, invocation.inputSet);
+      const restoredInputs = restoreSet(plan, invocation.inputSet);
       const cleanupList: (() => void)[] = [];
-      const reifiedOutputs = prepareOutputSet(
+      const preparedOutputs = prepareOutputSet(
         plan,
         action.o,
         invocation.outputSet,
         cleanupList,
       );
-      action.f(reifiedInputs, reifiedOutputs);
+      action.f(restoredInputs, preparedOutputs);
       decRefSet(plan, invocation.inputSet);
       for (const cleanup of cleanupList) {
         cleanup();
       }
+    }
+
+    if (fixedOptions.assertNoLeak) {
+      assertNoLeak(plan);
     }
 
     plan.state = "done";
@@ -478,5 +499,28 @@ function prepareOutput<T, K extends keyof T>(
     }
     default:
       throw new SubFunLogicError(`unknown data slot type: ${type}`);
+  }
+}
+
+function assertNoLeak(plan: Plan) {
+  for (const dataSlot of plan.dataSlots.values()) {
+    const type = dataSlot.type;
+    switch (type) {
+      case "global-input":
+        break;
+      case "intermediate":
+        if (!dataSlot.body.isFreed) {
+          throw new SubFunAssertionError(
+            "intermediate data slot is not freed",
+          );
+        }
+        break;
+      case "global-output":
+        break;
+      case "stub-output":
+        break;
+      default:
+        throw new SubFunLogicError(`unknown data slot type: ${type}`);
+    }
   }
 }

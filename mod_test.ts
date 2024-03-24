@@ -1,17 +1,27 @@
-import { assertEquals } from "https://deno.land/std@0.217.0/assert/mod.ts";
+import {
+  assertEquals,
+  assertGreater,
+} from "https://deno.land/std@0.217.0/assert/mod.ts";
 import { action, Context, input, Plan, run } from "./mod.ts";
 import { Pool } from "./pool.ts";
 import { Box } from "./box.ts";
+import { assertFalse } from "https://deno.land/std@0.217.0/assert/assert_false.ts";
 
 Deno.test(function calcTest() {
   const ctx = new Context();
 
+  let errorReported = false;
+
+  const boxedNumberPool = new Pool<Box<number>>(
+    () => new Box<number>(),
+    (x) => x.clear(),
+    (e) => {
+      errorReported = true;
+      console.error(e);
+    },
+  );
   const boxedNumberSpec = {
-    provider: new Pool<Box<number>>(
-      () => new Box<number>(),
-      (x) => x.clear(),
-      console.error,
-    ),
+    provider: boxedNumberPool,
   };
 
   const add = action(
@@ -39,7 +49,13 @@ Deno.test(function calcTest() {
   const { result } = add(plan, { x: result3, y: input5 });
 
   const resultBody = new Box<number>();
-  run(plan, { result: { handle: result, body: resultBody } });
+  run(plan, { result: { handle: result, body: resultBody } }, {
+    assertNoLeak: true,
+  });
 
   assertEquals(resultBody.value, 26);
+  assertEquals(boxedNumberPool.acquiredCount, 0);
+  assertGreater(boxedNumberPool.pooledCount, 0);
+  assertEquals(boxedNumberPool.taintedCount, 0);
+  assertFalse(errorReported);
 });
