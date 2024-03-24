@@ -87,9 +87,26 @@ export class Context {
   generateActionID = idGenerator((value) => value as ActionID);
   funcToActions = new WeakMap<WeakKey, UntypedAction>();
   actions = new Map<ActionID, UntypedAction>();
+
+  run(planFn: (p: PlanFnParams) => void, options?: RunOptions) {
+    const plan = new Plan(this);
+    const runParams: PlanFnParams = {
+      input: (value) => input(plan, value),
+      output: (handle, value) => output(plan, handle, value),
+      plan,
+    };
+    planFn(runParams);
+    run(plan, options);
+  }
 }
 
-export class Plan {
+type PlanFnParams = {
+  input<T>(value: T): Handle<T>;
+  output<T>(handle: Handle<T>, value: T): void;
+  plan: Plan;
+};
+
+class Plan {
   ctx: Context;
 
   state: PlanState;
@@ -150,13 +167,13 @@ export function action<I, O>(
   return action.d;
 }
 
-export function input<T>(plan: Plan, value: T): Handle<T> {
+function input<T>(plan: Plan, value: T): Handle<T> {
   const handle = plan.generateHandle();
   plan.dataSlots.set(handle, { type: "global-input", body: value });
   return handle as Handle<T>;
 }
 
-export function output<T>(plan: Plan, handle: Handle<T>, value: T) {
+function output<T>(plan: Plan, handle: Handle<T>, value: T) {
   const dataSlot = plan.dataSlots.get(handle);
   if (dataSlot != null) {
     const type = dataSlot.type;
@@ -179,7 +196,7 @@ export function output<T>(plan: Plan, handle: Handle<T>, value: T) {
   });
 }
 
-type RunOptions = {
+export type RunOptions = {
   assertNoLeak: boolean;
 };
 
@@ -187,7 +204,7 @@ const defaultRunOptions: RunOptions = {
   assertNoLeak: false,
 };
 
-export function run(
+function run(
   plan: Plan,
   options?: Partial<RunOptions>,
 ): void {

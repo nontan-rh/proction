@@ -4,7 +4,7 @@ import {
   assertGreater,
   assertGreaterOrEqual,
 } from "./deps.ts";
-import { action, Context, input, output, Plan, run } from "./mod.ts";
+import { action, Context } from "./mod.ts";
 import { Pool } from "./pool.ts";
 import { Box } from "./box.ts";
 
@@ -38,21 +38,21 @@ Deno.test(function calc() {
     ({ l, r }, { result }) => result.value = l.value * r.value,
   );
 
-  const plan = new Plan(ctx);
-  const input1 = input(plan, Box.withValue(1));
-  const input2 = input(plan, Box.withValue(2));
-  const input3 = input(plan, Box.withValue(3));
-  const input4 = input(plan, Box.withValue(4));
-  const input5 = input(plan, Box.withValue(5));
-  const { result: result1 } = add(plan, { l: input1, r: input2 });
-  const { result: result2 } = add(plan, { l: input3, r: input4 });
-  const { result: result3 } = mul(plan, { l: result1, r: result2 });
-  const { result } = add(plan, { l: result3, r: input5 });
-
   const resultBody = new Box<number>();
-  output(plan, result, resultBody);
+  ctx.run(({ input, output, plan }) => {
+    const input1 = input(Box.withValue(1));
+    const input2 = input(Box.withValue(2));
+    const input3 = input(Box.withValue(3));
+    const input4 = input(Box.withValue(4));
+    const input5 = input(Box.withValue(5));
 
-  run(plan, { assertNoLeak: true });
+    const { result: result1 } = add(plan, { l: input1, r: input2 });
+    const { result: result2 } = add(plan, { l: input3, r: input4 });
+    const { result: result3 } = mul(plan, { l: result1, r: result2 });
+    const { result } = add(plan, { l: result3, r: input5 });
+
+    output(result, resultBody);
+  }, { assertNoLeak: true });
 
   assertEquals(resultBody.value, 26);
   assertEquals(boxedNumberPool.acquiredCount, 0);
@@ -63,9 +63,7 @@ Deno.test(function calc() {
 
 Deno.test(function empty() {
   const ctx = new Context();
-
-  const plan = new Plan(ctx);
-  run(plan, { assertNoLeak: true });
+  ctx.run(() => {}, { assertNoLeak: true });
 });
 
 Deno.test(async function twoOutputs(t) {
@@ -109,17 +107,18 @@ Deno.test(async function twoOutputs(t) {
   );
 
   await t.step(function bothOutputsAreGlobal() {
-    const plan = new Plan(ctx);
-    const input1 = input(plan, Box.withValue(42));
-    const input2 = input(plan, Box.withValue(5));
-    const { div, mod } = divmod(plan, { l: input1, r: input2 });
-
     const divBody = new Box<number>();
     const modBody = new Box<number>();
-    output(plan, div, divBody);
-    output(plan, mod, modBody);
 
-    run(plan, { assertNoLeak: true });
+    ctx.run(({ input, output, plan }) => {
+      const input1 = input(Box.withValue(42));
+      const input2 = input(Box.withValue(5));
+
+      const { div, mod } = divmod(plan, { l: input1, r: input2 });
+
+      output(div, divBody);
+      output(mod, modBody);
+    }, { assertNoLeak: true });
 
     assertEquals(divBody.value, 8);
     assertEquals(modBody.value, 2);
@@ -127,32 +126,34 @@ Deno.test(async function twoOutputs(t) {
   });
 
   await t.step(function divOutputIsGlobal() {
-    const plan = new Plan(ctx);
-    const input1 = input(plan, Box.withValue(42));
-    const input2 = input(plan, Box.withValue(5));
-    const { div } = divmod(plan, { l: input1, r: input2 });
-
     const divBody = new Box<number>();
-    output(plan, div, divBody);
 
-    run(plan, { assertNoLeak: true });
+    ctx.run(({ input, output, plan }) => {
+      const input1 = input(Box.withValue(42));
+      const input2 = input(Box.withValue(5));
+
+      const { div } = divmod(plan, { l: input1, r: input2 });
+
+      output(div, divBody);
+    }, { assertNoLeak: true });
 
     assertEquals(divBody.value, 8);
     assertPostCondition();
   });
 
   await t.step(function modOutputIsIntermediate() {
-    const plan = new Plan(ctx);
-    const input1 = input(plan, Box.withValue(42));
-    const input2 = input(plan, Box.withValue(5));
-    const input3 = input(plan, Box.withValue(100));
-    const { mod } = divmod(plan, { l: input1, r: input2 });
-    const { result } = add(plan, { l: mod, r: input3 });
-
     const resultBody = new Box<number>();
-    output(plan, result, resultBody);
 
-    run(plan, { assertNoLeak: true });
+    ctx.run(({ input, output, plan }) => {
+      const input1 = input(Box.withValue(42));
+      const input2 = input(Box.withValue(5));
+      const input3 = input(Box.withValue(100));
+
+      const { mod } = divmod(plan, { l: input1, r: input2 });
+      const { result } = add(plan, { l: mod, r: input3 });
+
+      output(result, resultBody);
+    }, { assertNoLeak: true });
 
     assertEquals(resultBody.value, 102);
     assertPostCondition();
@@ -197,33 +198,33 @@ Deno.test(async function outputUsage(t) {
   );
 
   await t.step(function noOutputsAreUsed() {
-    const plan = new Plan(ctx);
-    const input1 = input(plan, Box.withValue(42));
-    const input2 = input(plan, Box.withValue(5));
-    add(plan, { l: input1, r: input2 });
-    mul(plan, { l: input1, r: input2 });
-
-    run(plan, { assertNoLeak: true });
+    ctx.run(({ input, plan }) => {
+      const input1 = input(Box.withValue(42));
+      const input2 = input(Box.withValue(5));
+      add(plan, { l: input1, r: input2 });
+      mul(plan, { l: input1, r: input2 });
+    }, { assertNoLeak: true });
 
     assertPostCondition();
   });
 
   await t.step(function outputIsUsedTwice() {
-    const plan = new Plan(ctx);
-    const input1 = input(plan, Box.withValue(42));
-    const input2 = input(plan, Box.withValue(2));
-    const input3 = input(plan, Box.withValue(3));
-    const input4 = input(plan, Box.withValue(4));
-    const { result: sum } = add(plan, { l: input1, r: input2 });
-    const { result: result1 } = mul(plan, { l: sum, r: input3 });
-    const { result: result2 } = add(plan, { l: sum, r: input4 });
-
     const result1Body = new Box<number>();
     const result2Body = new Box<number>();
-    output(plan, result1, result1Body);
-    output(plan, result2, result2Body);
 
-    run(plan, { assertNoLeak: true });
+    ctx.run(({ input, output, plan }) => {
+      const input1 = input(Box.withValue(42));
+      const input2 = input(Box.withValue(2));
+      const input3 = input(Box.withValue(3));
+      const input4 = input(Box.withValue(4));
+
+      const { result: sum } = add(plan, { l: input1, r: input2 });
+      const { result: result1 } = mul(plan, { l: sum, r: input3 });
+      const { result: result2 } = add(plan, { l: sum, r: input4 });
+
+      output(result1, result1Body);
+      output(result2, result2Body);
+    }, { assertNoLeak: true });
 
     assertPostCondition();
     assertEquals(result1Body.value, 132);
@@ -231,19 +232,20 @@ Deno.test(async function outputUsage(t) {
   });
 
   await t.step(function globalOutputIsUsedAsInput() {
-    const plan = new Plan(ctx);
-    const input1 = input(plan, Box.withValue(42));
-    const input2 = input(plan, Box.withValue(2));
-    const input3 = input(plan, Box.withValue(3));
-    const { result: sum } = add(plan, { l: input1, r: input2 });
-    const { result } = mul(plan, { l: sum, r: input3 });
-
     const sumBody = new Box<number>();
     const resultBody = new Box<number>();
-    output(plan, sum, sumBody);
-    output(plan, result, resultBody);
 
-    run(plan, { assertNoLeak: true });
+    ctx.run(({ input, output, plan }) => {
+      const input1 = input(Box.withValue(42));
+      const input2 = input(Box.withValue(2));
+      const input3 = input(Box.withValue(3));
+
+      const { result: sum } = add(plan, { l: input1, r: input2 });
+      const { result } = mul(plan, { l: sum, r: input3 });
+
+      output(sum, sumBody);
+      output(result, resultBody);
+    }, { assertNoLeak: true });
 
     assertPostCondition();
     assertEquals(sumBody.value, 44);
