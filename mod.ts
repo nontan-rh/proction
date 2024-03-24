@@ -29,9 +29,6 @@ type UntypedHandleSet<T> = {
 type HandleSet<T> = {
   [key in keyof T]: Handle<T[key]>;
 };
-type GlobalOutputSet<T> = {
-  [key in keyof T]: { handle: Handle<T[key]>; body: T[key] };
-};
 
 type ActionID = Brand<number, "actionID">;
 type Action<I, O> = {
@@ -159,6 +156,29 @@ export function input<T>(plan: Plan, value: T): Handle<T> {
   return handle as Handle<T>;
 }
 
+export function output<T>(plan: Plan, handle: Handle<T>, value: T) {
+  const dataSlot = plan.dataSlots.get(handle);
+  if (dataSlot != null) {
+    const type = dataSlot.type;
+    switch (type) {
+      case "global-input":
+        throw new SubFunError(`input handle is also specified as output`);
+      case "intermediate":
+        throw new SubFunLogicError(`unexpected data slot type: ${type}`);
+      case "global-output":
+        throw new SubFunError("output data slot collision");
+      case "stub-output":
+        throw new SubFunLogicError(`unexpected data slot type: ${type}`);
+      default:
+        throw new SubFunLogicError(`unknown data slot type: ${type}`);
+    }
+  }
+  plan.dataSlots.set(handle, {
+    type: "global-output",
+    body: value,
+  });
+}
+
 type RunOptions = {
   assertNoLeak: boolean;
 };
@@ -167,9 +187,8 @@ const defaultRunOptions: RunOptions = {
   assertNoLeak: false,
 };
 
-export function run<T>(
+export function run(
   plan: Plan,
-  globalOutputSet: GlobalOutputSet<T>,
   options?: Partial<RunOptions>,
 ): void {
   const fixedOptions = { ...defaultRunOptions, ...options };
@@ -183,8 +202,8 @@ export function run<T>(
   try {
     plan.state = "planning";
 
-    const invocations = prepareInvocations(plan, globalOutputSet);
-    prepareDataSlots(plan, globalOutputSet, invocations);
+    const invocations = prepareInvocations(plan);
+    prepareDataSlots(plan, invocations);
 
     plan.state = "running";
 
@@ -222,9 +241,8 @@ export function run<T>(
   }
 }
 
-function prepareInvocations<T>(
+function prepareInvocations(
   plan: Plan,
-  globalOutputSet: GlobalOutputSet<T>,
 ): Invocation[] {
   type ToposortState = "temporary" | "permanent";
 
@@ -264,8 +282,21 @@ function prepareInvocations<T>(
   }
 
   function visitHandle(handle: UntypedHandle): void {
-    if (plan.dataSlots.has(handle)) {
-      return;
+    const dataSlot = plan.dataSlots.get(handle);
+    if (dataSlot != null) {
+      const type = dataSlot.type;
+      switch (type) {
+        case "global-input":
+          return;
+        case "intermediate":
+          throw new SubFunLogicError(`unexpected data slot type: ${type}`);
+        case "global-output":
+          break;
+        case "stub-output":
+          throw new SubFunLogicError(`unexpected data slot type: ${type}`);
+        default:
+          throw new SubFunLogicError(`unknown data slot type: ${type}`);
+      }
     }
 
     const parentInvocation = outputToInvocation.get(handle);
@@ -278,45 +309,21 @@ function prepareInvocations<T>(
     visitInvocation(parentInvocation);
   }
 
-  for (const globalOutputKey in globalOutputSet) {
-    const globalOutput = globalOutputSet[globalOutputKey];
-    visitHandle(globalOutput.handle);
+  for (const handle of plan.dataSlots.keys()) {
+    const dataSlot = plan.dataSlots.get(handle);
+    if (dataSlot == null || dataSlot.type !== "global-output") {
+      continue;
+    }
+    visitHandle(handle);
   }
 
   return result;
 }
 
-function prepareDataSlots<T>(
+function prepareDataSlots(
   plan: Plan,
-  globalOutputSet: GlobalOutputSet<T>,
   invocations: Invocation[],
 ): void {
-  // prepare output
-  for (const globalOutputKey in globalOutputSet) {
-    const globalOutput = globalOutputSet[globalOutputKey];
-
-    const dataSlot = plan.dataSlots.get(globalOutput.handle);
-    if (dataSlot != null) {
-      const type = dataSlot.type;
-      switch (type) {
-        case "global-input":
-          throw new SubFunError(`input handle is also specified as output`);
-        case "intermediate":
-          throw new SubFunLogicError(`unexpected data slot type: ${type}`);
-        case "global-output":
-          throw new SubFunError("output data slot collision");
-        case "stub-output":
-          throw new SubFunLogicError(`unexpected data slot type: ${type}`);
-        default:
-          throw new SubFunLogicError(`unknown data slot type: ${type}`);
-      }
-    }
-    plan.dataSlots.set(globalOutput.handle, {
-      type: "global-output",
-      body: globalOutput.body,
-    });
-  }
-
   // prepare intermediate inputs
   for (const invocation of invocations) {
     for (const inputKey in invocation.inputSet) {

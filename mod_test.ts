@@ -4,7 +4,7 @@ import {
   assertGreater,
   assertGreaterOrEqual,
 } from "./deps.ts";
-import { action, Context, input, Plan, run } from "./mod.ts";
+import { action, Context, input, output, Plan, run } from "./mod.ts";
 import { Pool } from "./pool.ts";
 import { Box } from "./box.ts";
 
@@ -50,9 +50,9 @@ Deno.test(function calc() {
   const { result } = add(plan, { l: result3, r: input5 });
 
   const resultBody = new Box<number>();
-  run(plan, { result: { handle: result, body: resultBody } }, {
-    assertNoLeak: true,
-  });
+  output(plan, result, resultBody);
+
+  run(plan, { assertNoLeak: true });
 
   assertEquals(resultBody.value, 26);
   assertEquals(boxedNumberPool.acquiredCount, 0);
@@ -65,7 +65,7 @@ Deno.test(function empty() {
   const ctx = new Context();
 
   const plan = new Plan(ctx);
-  run(plan, {}, { assertNoLeak: true });
+  run(plan, { assertNoLeak: true });
 });
 
 Deno.test(async function twoOutputs(t) {
@@ -116,12 +116,10 @@ Deno.test(async function twoOutputs(t) {
 
     const divBody = new Box<number>();
     const modBody = new Box<number>();
-    run(plan, {
-      div: { handle: div, body: divBody },
-      mod: { handle: mod, body: modBody },
-    }, {
-      assertNoLeak: true,
-    });
+    output(plan, div, divBody);
+    output(plan, mod, modBody);
+
+    run(plan, { assertNoLeak: true });
 
     assertEquals(divBody.value, 8);
     assertEquals(modBody.value, 2);
@@ -135,11 +133,9 @@ Deno.test(async function twoOutputs(t) {
     const { div } = divmod(plan, { l: input1, r: input2 });
 
     const divBody = new Box<number>();
-    run(plan, {
-      div: { handle: div, body: divBody },
-    }, {
-      assertNoLeak: true,
-    });
+    output(plan, div, divBody);
+
+    run(plan, { assertNoLeak: true });
 
     assertEquals(divBody.value, 8);
     assertPostCondition();
@@ -154,11 +150,9 @@ Deno.test(async function twoOutputs(t) {
     const { result } = add(plan, { l: mod, r: input3 });
 
     const resultBody = new Box<number>();
-    run(plan, {
-      result: { handle: result, body: resultBody },
-    }, {
-      assertNoLeak: true,
-    });
+    output(plan, result, resultBody);
+
+    run(plan, { assertNoLeak: true });
 
     assertEquals(resultBody.value, 102);
     assertPostCondition();
@@ -209,9 +203,7 @@ Deno.test(async function outputUsage(t) {
     add(plan, { l: input1, r: input2 });
     mul(plan, { l: input1, r: input2 });
 
-    run(plan, {}, {
-      assertNoLeak: true,
-    });
+    run(plan, { assertNoLeak: true });
 
     assertPostCondition();
   });
@@ -228,12 +220,10 @@ Deno.test(async function outputUsage(t) {
 
     const result1Body = new Box<number>();
     const result2Body = new Box<number>();
-    run(plan, {
-      result1: { handle: result1, body: result1Body },
-      result2: { handle: result2, body: result2Body },
-    }, {
-      assertNoLeak: true,
-    });
+    output(plan, result1, result1Body);
+    output(plan, result2, result2Body);
+
+    run(plan, { assertNoLeak: true });
 
     assertPostCondition();
     assertEquals(result1Body.value, 132);
@@ -250,12 +240,10 @@ Deno.test(async function outputUsage(t) {
 
     const sumBody = new Box<number>();
     const resultBody = new Box<number>();
-    run(plan, {
-      peek: { handle: sum, body: sumBody },
-      result1: { handle: result, body: resultBody },
-    }, {
-      assertNoLeak: true,
-    });
+    output(plan, sum, sumBody);
+    output(plan, result, resultBody);
+
+    run(plan, { assertNoLeak: true });
 
     assertPostCondition();
     assertEquals(sumBody.value, 44);
