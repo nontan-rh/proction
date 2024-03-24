@@ -20,7 +20,7 @@ function idGenerator<T>(transform: (x: number) => T): () => T {
 
 const handleMarkKey = Symbol("handleMark");
 const phantomDataKey = Symbol("phantomData");
-type Handle<T> = { [handleMarkKey]: never; [phantomDataKey]: T; value: number };
+type Handle<T> = number & { [handleMarkKey]: never; [phantomDataKey]: T };
 type UntypedHandle = Handle<unknown>;
 
 type UntypedHandleSet<T> = {
@@ -94,7 +94,7 @@ export class Plan {
 
   state: PlanState;
 
-  generateHandle = idGenerator((value) => ({ value } as UntypedHandle));
+  generateHandle = idGenerator((value) => (value as UntypedHandle));
   dataSlots = new Map<UntypedHandle, DataSlot>();
 
   generateInvocationID = idGenerator((value) => value as InvocationID);
@@ -302,7 +302,7 @@ function prepareInvocations(
     const parentInvocation = outputToInvocation.get(handle);
     if (parentInvocation == null) {
       throw new SubFunLogicError(
-        `parent invocation not found for handle: ${handle.value}`,
+        `parent invocation not found for handle: ${handle}`,
       );
     }
 
@@ -394,7 +394,7 @@ function restore<T>(plan: Plan, handle: Handle<T>): T {
   const dataSlot = plan.dataSlots.get(handle);
   if (dataSlot == null) {
     throw new SubFunLogicError(
-      `datum not saved for handle: ${handle.value}`,
+      `datum not saved for handle: ${handle}`,
     );
   }
 
@@ -430,7 +430,7 @@ function decRef<T>(plan: Plan, handle: Handle<T>): void {
   const dataSlot = plan.dataSlots.get(handle);
   if (dataSlot == null) {
     throw new SubFunLogicError(
-      `data slot not saved for handle: ${handle.value}`,
+      `data slot not saved for handle: ${handle}`,
     );
   }
 
