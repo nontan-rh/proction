@@ -14,11 +14,11 @@ export class Pool<T> implements Provider<T> {
   constructor(
     create: () => T,
     cleanup: (x: T) => void,
-    errorReport: (e: unknown) => void,
+    reportError: (e: unknown) => void,
   ) {
     this.#create = create;
     this.#cleanup = cleanup;
-    this.#reportError = errorReport;
+    this.#reportError = reportError;
   }
 
   get pooledCount(): number {

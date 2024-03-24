@@ -1,11 +1,7 @@
-import {
-  assertEquals,
-  assertGreater,
-} from "https://deno.land/std@0.217.0/assert/mod.ts";
+import { assertEquals, assertFalse, assertGreater } from "./deps.ts";
 import { action, Context, input, Plan, run } from "./mod.ts";
 import { Pool } from "./pool.ts";
 import { Box } from "./box.ts";
-import { assertFalse } from "https://deno.land/std@0.217.0/assert/assert_false.ts";
 
 Deno.test(function calcTest() {
   const ctx = new Context();
