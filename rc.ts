@@ -23,13 +23,13 @@ export class Rc<T> {
     return this.#body;
   }
 
-  incRef() {
+  incRef(): void {
     this.#assertNotFreed();
 
     this.#count++;
   }
 
-  decRef() {
+  decRef(): void {
     this.#assertNotFreed();
 
     this.#count--;
@@ -47,13 +47,13 @@ export class Rc<T> {
     }
   }
 
-  #assertNotFreed() {
+  get isFreed(): boolean {
+    return this.#count <= 0;
+  }
+
+  #assertNotFreed(): void {
     if (this.isFreed) {
       throw new SubFunLogicError("this reference counter is already freed");
     }
-  }
-
-  get isFreed(): boolean {
-    return this.#count <= 0;
   }
 }

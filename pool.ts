@@ -48,7 +48,7 @@ export class Pool<T> implements Provider<T> {
     this.#pooledCells.push(pooledCell);
   }
 
-  #acquireCell(x: T) {
+  #acquireCell(x: T): { body: T } {
     let vacantCell = this.#vacantCells.pop();
     if (vacantCell == null) {
       vacantCell = { body: x };
@@ -58,7 +58,7 @@ export class Pool<T> implements Provider<T> {
     return vacantCell;
   }
 
-  #releaseCell(cell: { body: T }) {
+  #releaseCell(cell: { body: T }): void {
     this.#vacantCells.push(cell);
   }
 }

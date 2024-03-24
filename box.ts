@@ -25,7 +25,7 @@ export class Box<T> {
     return this.#value.length !== 0;
   }
 
-  clear() {
+  clear(): void {
     this.#value.length = 0;
   }
 }

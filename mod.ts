@@ -221,7 +221,7 @@ function prepareInvocations<T>(
   }
 
   const visitedInvocations = new Map<InvocationID, ToposortState>();
-  function visitInvocation(invocation: Invocation) {
+  function visitInvocation(invocation: Invocation): void {
     const invocationID = invocation.id;
 
     const state = visitedInvocations.get(invocationID);
@@ -242,7 +242,7 @@ function prepareInvocations<T>(
     result.unshift(invocation);
   }
 
-  function visitHandle(handle: UntypedHandle) {
+  function visitHandle(handle: UntypedHandle): void {
     if (plan.dataSlots.has(handle)) {
       return;
     }
@@ -269,7 +269,7 @@ function prepareDataSlots<T>(
   plan: Plan,
   globalOutputSet: GlobalOutputSet<T>,
   invocations: Invocation[],
-) {
+): void {
   // prepare output
   for (const globalOutputKey in globalOutputSet) {
     const globalOutput = globalOutputSet[globalOutputKey];
@@ -392,13 +392,13 @@ function restore<T>(plan: Plan, handle: Handle<T>): T {
   }
 }
 
-function decRefSet<T>(plan: Plan, handleSet: HandleSet<T>) {
+function decRefSet<T>(plan: Plan, handleSet: HandleSet<T>): void {
   for (const key in handleSet) {
     decRef(plan, handleSet[key]);
   }
 }
 
-function decRef<T>(plan: Plan, handle: Handle<T>) {
+function decRef<T>(plan: Plan, handle: Handle<T>): void {
   const dataSlot = plan.dataSlots.get(handle);
   if (dataSlot == null) {
     throw new SubFunLogicError(
