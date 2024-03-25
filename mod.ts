@@ -216,16 +216,12 @@ type IntermediateSlot = { type: "intermediate"; body: Rc<Box<unknown>> };
 type GlobalOutputSlot = { type: "global-output"; body: unknown };
 type StubOutputSlot = { type: "stub-output" };
 
+export type ParamSpecSet<T> = {
+  [key in keyof T]: TypeSpec<T[key]>;
+};
+
 export type TypeSpec<T> = {
   provider: Provider<T>;
-};
-
-export type ParamSpecSet<T> = {
-  [key in keyof T]: ParamSpec<T[key]>;
-};
-
-export type ParamSpec<T> = {
-  type: TypeSpec<T>;
 };
 
 function input<T>(plan: Plan, value: T): Handle<T> {
@@ -435,8 +431,8 @@ function prepareDataSlots(
               return;
             }
             const paramSpec =
-              (action.i as Record<ObjectKey, ParamSpec<unknown>>)[inputKey]; // note: very loose type casting
-            paramSpec.type.provider.release(x.value);
+              (action.i as Record<ObjectKey, TypeSpec<unknown>>)[inputKey]; // note: very loose type casting
+            paramSpec.provider.release(x.value);
           }, console.error),
         });
       }
@@ -568,7 +564,7 @@ function prepareOutput<T, K extends keyof T>(
       if (dataSlot.body.body.isSet) {
         throw new SubFunLogicError("data slot is already set");
       }
-      const body = paramSpecSet[key].type.provider.acquire();
+      const body = paramSpecSet[key].provider.acquire();
       dataSlot.body.body.value = body;
       return body;
     }
@@ -577,7 +573,7 @@ function prepareOutput<T, K extends keyof T>(
       return body as T[K];
     }
     case "stub-output": {
-      const provider = paramSpecSet[key].type.provider;
+      const provider = paramSpecSet[key].provider;
       const body = provider.acquire();
       cleanupList.push(() => provider.release(body));
       return body;

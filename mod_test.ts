@@ -19,20 +19,20 @@ Deno.test(function calc() {
       console.error(e);
     },
   );
-  const boxedNumberSpec = {
+  const BoxedNumber = {
     provider: boxedNumberPool,
   };
 
   const ctx = ContextBuilder.empty()
     .addAction(
       "add",
-      { l: { type: boxedNumberSpec }, r: { type: boxedNumberSpec } },
-      { result: { type: boxedNumberSpec } },
+      { l: BoxedNumber, r: BoxedNumber },
+      { result: BoxedNumber },
       ({ l, r }, { result }) => result.value = l.value + r.value,
     ).addAction(
       "mul",
-      { l: { type: boxedNumberSpec }, r: { type: boxedNumberSpec } },
-      { result: { type: boxedNumberSpec } },
+      { l: BoxedNumber, r: BoxedNumber },
+      { result: BoxedNumber },
       ({ l, r }, { result }) => result.value = l.value * r.value,
     ).build();
 
@@ -75,7 +75,7 @@ Deno.test(async function twoOutputs(t) {
       console.error(e);
     },
   );
-  const boxedNumberSpec = {
+  const BoxedNumber = {
     provider: boxedNumberPool,
   };
 
@@ -89,16 +89,16 @@ Deno.test(async function twoOutputs(t) {
   const ctx = ContextBuilder.empty()
     .addAction(
       "divmod",
-      { l: { type: boxedNumberSpec }, r: { type: boxedNumberSpec } },
-      { div: { type: boxedNumberSpec }, mod: { type: boxedNumberSpec } },
+      { l: BoxedNumber, r: BoxedNumber },
+      { div: BoxedNumber, mod: BoxedNumber },
       ({ l, r }, { div, mod }) => {
         div.value = Math.floor(l.value / r.value);
         mod.value = l.value % r.value;
       },
     ).addAction(
       "add",
-      { l: { type: boxedNumberSpec }, r: { type: boxedNumberSpec } },
-      { result: { type: boxedNumberSpec } },
+      { l: BoxedNumber, r: BoxedNumber },
+      { result: BoxedNumber },
       ({ l, r }, { result }) => result.value = l.value + r.value,
     ).build();
 
@@ -167,7 +167,7 @@ Deno.test(async function outputUsage(t) {
       console.error(e);
     },
   );
-  const boxedNumberSpec = {
+  const BoxedNumber = {
     provider: boxedNumberPool,
   };
 
@@ -181,13 +181,13 @@ Deno.test(async function outputUsage(t) {
   const ctx = ContextBuilder.empty()
     .addAction(
       "add",
-      { l: { type: boxedNumberSpec }, r: { type: boxedNumberSpec } },
-      { result: { type: boxedNumberSpec } },
+      { l: BoxedNumber, r: BoxedNumber },
+      { result: BoxedNumber },
       ({ l, r }, { result }) => result.value = l.value + r.value,
     ).addAction(
       "mul",
-      { l: { type: boxedNumberSpec }, r: { type: boxedNumberSpec } },
-      { result: { type: boxedNumberSpec } },
+      { l: BoxedNumber, r: BoxedNumber },
+      { result: BoxedNumber },
       ({ l, r }, { result }) => result.value = l.value * r.value,
     ).build();
 
