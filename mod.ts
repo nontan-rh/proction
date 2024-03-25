@@ -43,7 +43,7 @@ type UntypedAction = Action<unknown, unknown>;
 
 function createAction<I, O>(
   generateActionID: () => ActionID,
-  name: string | number | symbol,
+  name: ObjectKey,
   f: (inputSet: I, outputSet: O) => void,
   i: ParamSpecSet<I>,
   o: ParamSpecSet<O>,
@@ -88,7 +88,7 @@ type Invocation = {
 
 type ContextBuilderBody = {
   generateActionID: () => ActionID;
-  actions: Map<string | number | symbol, UntypedAction>;
+  actions: Map<ObjectKey, UntypedAction>;
 };
 
 export class ContextBuilder<A> {
@@ -99,16 +99,16 @@ export class ContextBuilder<A> {
     this.#body = body;
   }
 
-  static empty(): ContextBuilder<Record<string | number | symbol, never>> {
-    return new ContextBuilder<Record<string | number | symbol, never>>(
+  static empty(): ContextBuilder<Record<ObjectKey, never>> {
+    return new ContextBuilder<Record<ObjectKey, never>>(
       {
         generateActionID: idGenerator((value) => value as ActionID),
-        actions: new Map<string | number | symbol, UntypedAction>(),
+        actions: new Map<ObjectKey, UntypedAction>(),
       },
     );
   }
 
-  addAction<N extends string | number | symbol, I, O>(
+  addAction<N extends ObjectKey, I, O>(
     name: N,
     i: ParamSpecSet<I>,
     o: ParamSpecSet<O>,
@@ -166,7 +166,7 @@ export class Context<A> {
 
   run(planFn: (p: PlanFnParams<A>) => void, options?: RunOptions) {
     const plan = new Plan(this.#actions);
-    const boundActions: Record<string | number | symbol, unknown> = {};
+    const boundActions: Record<ObjectKey, unknown> = {};
     for (const action of this.#actions.values()) {
       boundActions[action.name] = (inputSet: HandleSet<unknown>) =>
         action.d(plan, inputSet);
