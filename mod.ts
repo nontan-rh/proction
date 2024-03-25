@@ -33,6 +33,7 @@ type HandleSet<T> = {
 type ActionID = Brand<number, "actionID">;
 type Action<I, O> = {
   id: ActionID;
+  name: string | symbol | number;
   f: (inputSet: I, outputSet: O) => void;
   d: (plan: Plan, inputSet: HandleSet<I>) => HandleSet<O>;
   i: ParamSpecSet<I>;
@@ -41,12 +42,13 @@ type Action<I, O> = {
 type UntypedAction = Action<unknown, unknown>;
 
 function createAction<I, O>(
-  ctx: Context,
+  generateActionID: () => ActionID,
+  name: string | number | symbol,
   f: (inputSet: I, outputSet: O) => void,
   i: ParamSpecSet<I>,
   o: ParamSpecSet<O>,
 ): Action<I, O> {
-  const actionID = ctx.generateActionID();
+  const actionID = generateActionID();
   const d = (plan: Plan, inputSet: HandleSet<I>): HandleSet<O> => {
     const partialOutputs: Partial<HandleSet<O>> = {};
     for (const key in o) {
@@ -68,6 +70,7 @@ function createAction<I, O>(
 
   return {
     id: actionID,
+    name,
     f,
     d,
     i,
@@ -83,31 +86,109 @@ type Invocation = {
   outputSet: Record<ObjectKey, UntypedHandle>;
 };
 
-export class Context {
-  generateActionID = idGenerator((value) => value as ActionID);
-  funcToActions = new WeakMap<WeakKey, UntypedAction>();
-  actions = new Map<ActionID, UntypedAction>();
+type ContextBuilderBody = {
+  generateActionID: () => ActionID;
+  actions: Map<string | number | symbol, UntypedAction>;
+};
 
-  run(planFn: (p: PlanFnParams) => void, options?: RunOptions) {
-    const plan = new Plan(this);
-    const runParams: PlanFnParams = {
+export class ContextBuilder<A> {
+  #body: ContextBuilderBody;
+  #consumed = false;
+
+  constructor(body: ContextBuilderBody) {
+    this.#body = body;
+  }
+
+  static empty(): ContextBuilder<Record<string | number | symbol, never>> {
+    return new ContextBuilder<Record<string | number | symbol, never>>(
+      {
+        generateActionID: idGenerator((value) => value as ActionID),
+        actions: new Map<string | number | symbol, UntypedAction>(),
+      },
+    );
+  }
+
+  addAction<N extends string | number | symbol, I, O>(
+    name: N,
+    i: ParamSpecSet<I>,
+    o: ParamSpecSet<O>,
+    f: (inputSet: I, outputSet: O) => void,
+  ): ContextBuilder<
+    A & { [name in N]: (inputSet: HandleSet<I>) => HandleSet<O> }
+  > {
+    if (this.#consumed) {
+      throw new SubFunError("ContextBuilder is already consumed");
+    }
+    if (this.#body.actions.has(name)) {
+      throw new SubFunError(
+        `action with name (${
+          String(name)
+        }) is already registered to ContextBuilder`,
+      );
+    }
+    this.#consumed = true;
+
+    const action = createAction(
+      this.#body.generateActionID,
+      name,
+      f,
+      i,
+      o,
+    ) as UntypedAction;
+    this.#body.actions.set(name, action);
+
+    return new ContextBuilder<
+      A & { [name in N]: (inputSet: HandleSet<I>) => HandleSet<O> }
+    >(this.#body);
+  }
+
+  build(): Context<A> {
+    if (this.#consumed) {
+      throw new SubFunError("ContextBuilder is already consumed");
+    }
+    this.#consumed = true;
+
+    const actions = new Map<ActionID, UntypedAction>();
+    for (const action of this.#body.actions.values()) {
+      actions.set(action.id, action);
+    }
+
+    return new Context(actions);
+  }
+}
+
+export class Context<A> {
+  #actions = new Map<ActionID, UntypedAction>();
+
+  constructor(actions: Map<ActionID, UntypedAction>) {
+    this.#actions = actions;
+  }
+
+  run(planFn: (p: PlanFnParams<A>) => void, options?: RunOptions) {
+    const plan = new Plan(this.#actions);
+    const boundActions: Record<string | number | symbol, unknown> = {};
+    for (const action of this.#actions.values()) {
+      boundActions[action.name] = (inputSet: HandleSet<unknown>) =>
+        action.d(plan, inputSet);
+    }
+    const runParams: PlanFnParams<A> = {
       input: (value) => input(plan, value),
       output: (handle, value) => output(plan, handle, value),
-      plan,
+      actions: boundActions as A,
     };
     planFn(runParams);
     run(plan, options);
   }
 }
 
-type PlanFnParams = {
+type PlanFnParams<A> = {
   input<T>(value: T): Handle<T>;
   output<T>(handle: Handle<T>, value: T): void;
-  plan: Plan;
+  actions: A;
 };
 
 class Plan {
-  ctx: Context;
+  actions: Map<ActionID, UntypedAction>;
 
   state: PlanState;
 
@@ -117,8 +198,8 @@ class Plan {
   generateInvocationID = idGenerator((value) => value as InvocationID);
   invocations = new Map<InvocationID, Invocation>();
 
-  constructor(ctx: Context) {
-    this.ctx = ctx;
+  constructor(actions: Map<ActionID, UntypedAction>) {
+    this.actions = actions;
     this.state = "initial";
   }
 }
@@ -146,26 +227,6 @@ export type ParamSpecSet<T> = {
 export type ParamSpec<T> = {
   type: TypeSpec<T>;
 };
-
-export function action<I, O>(
-  ctx: Context,
-  i: ParamSpecSet<I>,
-  o: ParamSpecSet<O>,
-  f: (inputSet: I, outputSet: O) => void,
-): (plan: Plan, inputSet: HandleSet<I>) => HandleSet<O> {
-  const cachedAction = ctx.funcToActions.get(f);
-  if (cachedAction != null) {
-    return cachedAction.d as (
-      plan: Plan,
-      inputSet: HandleSet<I>,
-    ) => HandleSet<O>;
-  }
-
-  const action = createAction(ctx, f, i, o);
-  ctx.funcToActions.set(f, action as UntypedAction);
-  ctx.actions.set(action.id, action as UntypedAction);
-  return action.d;
-}
 
 function input<T>(plan: Plan, value: T): Handle<T> {
   const handle = plan.generateHandle();
@@ -226,7 +287,7 @@ function run(
 
     for (let i = invocations.length - 1; i >= 0; i--) {
       const invocation = invocations[i];
-      const action = plan.ctx.actions.get(invocation.actionID);
+      const action = plan.actions.get(invocation.actionID);
       if (action == null) {
         throw new SubFunLogicError("action not found");
       }
@@ -344,7 +405,7 @@ function prepareDataSlots(
   // prepare intermediate inputs
   for (const invocation of invocations) {
     for (const inputKey in invocation.inputSet) {
-      const action = plan.ctx.actions.get(invocation.actionID);
+      const action = plan.actions.get(invocation.actionID);
       if (action == null) {
         throw new SubFunLogicError("action not found");
       }
@@ -385,7 +446,7 @@ function prepareDataSlots(
   // prepare intermediate outputs
   for (const invocation of invocations) {
     for (const outputKey in invocation.outputSet) {
-      const action = plan.ctx.actions.get(invocation.actionID);
+      const action = plan.actions.get(invocation.actionID);
       if (action == null) {
         throw new SubFunLogicError("action not found");
       }
