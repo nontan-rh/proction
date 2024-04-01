@@ -35,11 +35,11 @@ type Action<I extends ParamSpecSet, O extends ParamSpecSet> = {
   id: ActionID;
   name: ObjectKey;
   f: (inputSet: InputSet<I>, outputSet: OutputSet<O>) => void;
-  d: (
+  d: <G extends Partial<HandleSet<OutputSet<O>>>>(
     plan: Plan,
     inputSet: HandleSet<InputSet<I>>,
-    globalOutputSet: Partial<HandleSet<OutputSet<O>>>,
-  ) => HandleSet<InputSet<O>>;
+    globalOutputSet: G,
+  ) => Omit<HandleSet<InputSet<O>>, keyof G>;
   i: I;
   o: O;
 };
@@ -60,12 +60,13 @@ function createAction<I extends ParamSpecSet, O extends ParamSpecSet>(
   o: O,
 ): Action<I, O> {
   const actionID = generateActionID();
-  const d = (
+  const d = <G extends Partial<HandleSet<OutputSet<O>>>>(
     plan: Plan,
     inputSet: HandleSet<InputSet<I>>,
-    globalOutputSet: Partial<HandleSet<OutputSet<O>>>,
-  ): HandleSet<OutputSet<O>> => {
+    globalOutputSet: G,
+  ): Omit<HandleSet<InputSet<O>>, keyof G> => {
     const partialOutputs: Partial<HandleSet<OutputSet<O>>> = {};
+    const partialReturnOutputs: Partial<HandleSet<OutputSet<O>>> = {};
 
     for (const key in globalOutputSet) {
       partialOutputs[key] = globalOutputSet[key];
@@ -76,11 +77,17 @@ function createAction<I extends ParamSpecSet, O extends ParamSpecSet>(
         continue;
       }
 
-      partialOutputs[key] = plan.generateHandle() as HandleSet<
+      const handle = plan.generateHandle() as HandleSet<
         OutputSet<O>
       >[typeof key];
+      partialReturnOutputs[key] = handle;
+      partialOutputs[key] = handle;
     }
     const outputSet = partialOutputs as HandleSet<OutputSet<O>>;
+    const returnOutputs = partialReturnOutputs as Omit<
+      HandleSet<InputSet<O>>,
+      keyof G
+    >;
 
     const invocationID = plan.generateInvocationID();
     const invocation: Invocation = {
@@ -91,7 +98,7 @@ function createAction<I extends ParamSpecSet, O extends ParamSpecSet>(
     };
     plan.invocations.set(invocation.id, invocation);
 
-    return outputSet;
+    return returnOutputs;
   };
 
   return {
@@ -146,10 +153,10 @@ export class ContextBuilder<A> {
   ): ContextBuilder<
     & A
     & {
-      [name in N]: (
+      [name in N]: <G extends Partial<HandleSet<OutputSet<O>>>>(
         inputSet: HandleSet<InputSet<I>>,
-        globalOutputSet: Partial<HandleSet<OutputSet<O>>>,
-      ) => HandleSet<InputSet<O>>;
+        globalOutputSet: G,
+      ) => Omit<HandleSet<InputSet<O>>, keyof G>;
     }
   > {
     if (this.#consumed) {
@@ -176,10 +183,10 @@ export class ContextBuilder<A> {
     return new ContextBuilder<
       & A
       & {
-        [name in N]: (
+        [name in N]: <G extends Partial<HandleSet<OutputSet<O>>>>(
           inputSet: HandleSet<InputSet<I>>,
-          globalOutputSet: Partial<HandleSet<OutputSet<O>>>,
-        ) => HandleSet<InputSet<O>>;
+          globalOutputSet: G,
+        ) => Omit<HandleSet<InputSet<O>>, keyof G>;
       }
     >(this.#body);
   }
