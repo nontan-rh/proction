@@ -20,7 +20,7 @@ function idGenerator<T>(transform: (x: number) => T): () => T {
 
 const handleMarkKey = Symbol("handleMark");
 const phantomDataKey = Symbol("phantomData");
-type Handle<T> = number & { [handleMarkKey]: never; [phantomDataKey]: T };
+type Handle<T> = number & { [handleMarkKey]: never; [phantomDataKey]: () => T };
 type UntypedHandle = Handle<unknown>;
 
 type UntypedHandleSet<T> = {
@@ -35,7 +35,11 @@ type Action<I extends ParamSpecSet, O extends ParamSpecSet> = {
   id: ActionID;
   name: ObjectKey;
   f: (inputSet: InputSet<I>, outputSet: OutputSet<O>) => void;
-  d: (plan: Plan, inputSet: HandleSet<InputSet<I>>) => HandleSet<OutputSet<O>>;
+  d: (
+    plan: Plan,
+    inputSet: HandleSet<InputSet<I>>,
+    globalOutputSet: Partial<HandleSet<OutputSet<O>>>,
+  ) => HandleSet<InputSet<O>>;
   i: I;
   o: O;
 };
@@ -43,7 +47,7 @@ type UntypedAction = {
   id: ActionID;
   name: ObjectKey;
   f: (inputSet: unknown, outputSet: unknown) => void;
-  d: (plan: Plan, inputSet: unknown) => unknown;
+  d: (plan: Plan, inputSet: unknown, globalOutputSet: unknown) => unknown;
   i: ParamSpecSet;
   o: ParamSpecSet;
 };
@@ -59,9 +63,19 @@ function createAction<I extends ParamSpecSet, O extends ParamSpecSet>(
   const d = (
     plan: Plan,
     inputSet: HandleSet<InputSet<I>>,
+    globalOutputSet: Partial<HandleSet<OutputSet<O>>>,
   ): HandleSet<OutputSet<O>> => {
     const partialOutputs: Partial<HandleSet<OutputSet<O>>> = {};
+
+    for (const key in globalOutputSet) {
+      partialOutputs[key] = globalOutputSet[key];
+    }
+
     for (const key in o) {
+      if (key in partialOutputs) {
+        continue;
+      }
+
       partialOutputs[key] = plan.generateHandle() as HandleSet<
         OutputSet<O>
       >[typeof key];
@@ -134,7 +148,8 @@ export class ContextBuilder<A> {
     & {
       [name in N]: (
         inputSet: HandleSet<InputSet<I>>,
-      ) => HandleSet<OutputSet<O>>;
+        globalOutputSet: Partial<HandleSet<OutputSet<O>>>,
+      ) => HandleSet<InputSet<O>>;
     }
   > {
     if (this.#consumed) {
@@ -163,7 +178,8 @@ export class ContextBuilder<A> {
       & {
         [name in N]: (
           inputSet: HandleSet<InputSet<I>>,
-        ) => HandleSet<OutputSet<O>>;
+          globalOutputSet: Partial<HandleSet<OutputSet<O>>>,
+        ) => HandleSet<InputSet<O>>;
       }
     >(this.#body);
   }
@@ -194,12 +210,14 @@ export class Context<A> {
     const plan = new Plan(this.#actions);
     const boundActions: Record<ObjectKey, unknown> = {};
     for (const action of this.#actions.values()) {
-      boundActions[action.name] = (inputSet: HandleSet<unknown>) =>
-        action.d(plan, inputSet);
+      boundActions[action.name] = (
+        inputSet: HandleSet<unknown>,
+        globalOutputSet: HandleSet<unknown>,
+      ) => action.d(plan, inputSet, globalOutputSet);
     }
     const runParams: PlanFnParams<A> = {
       input: (value) => input(plan, value),
-      output: (handle, value) => output(plan, handle, value),
+      output: (value) => output(plan, value),
       actions: boundActions as A,
     };
     planFn(runParams);
@@ -209,7 +227,7 @@ export class Context<A> {
 
 type PlanFnParams<A> = {
   input<T>(value: T): Handle<T>;
-  output<T>(handle: Handle<T>, value: T): void;
+  output<T>(value: T): Handle<T>;
   actions: A;
 };
 
@@ -280,27 +298,10 @@ function input<T>(plan: Plan, value: T): Handle<T> {
   return handle as Handle<T>;
 }
 
-function output<T>(plan: Plan, handle: Handle<T>, value: T) {
-  const dataSlot = plan.dataSlots.get(handle);
-  if (dataSlot != null) {
-    const type = dataSlot.type;
-    switch (type) {
-      case "global-input":
-        throw new SubFunError(`input handle is also specified as output`);
-      case "intermediate":
-        throw new SubFunLogicError(`unexpected data slot type: ${type}`);
-      case "global-output":
-        throw new SubFunError("output data slot collision");
-      case "stub-output":
-        throw new SubFunLogicError(`unexpected data slot type: ${type}`);
-      default:
-        throw new SubFunLogicError(`unknown data slot type: ${type}`);
-    }
-  }
-  plan.dataSlots.set(handle, {
-    type: "global-output",
-    body: value,
-  });
+function output<T>(plan: Plan, value: T): Handle<T> {
+  const handle = plan.generateHandle();
+  plan.dataSlots.set(handle, { type: "global-output", body: value });
+  return handle as Handle<T>;
 }
 
 export type RunOptions = {
