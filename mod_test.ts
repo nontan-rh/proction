@@ -7,6 +7,7 @@ import {
 import { ContextBuilder } from "./mod.ts";
 import { Pool } from "./pool.ts";
 import { Box } from "./box.ts";
+import { typeSpec } from "./mod.ts";
 
 Deno.test(function calc() {
   let errorReported = false;
@@ -19,9 +20,7 @@ Deno.test(function calc() {
       console.error(e);
     },
   );
-  const BoxedNumber = {
-    provider: boxedNumberPool,
-  };
+  const BoxedNumber = typeSpec(boxedNumberPool);
 
   const ctx = ContextBuilder.empty()
     .addAction(
@@ -75,9 +74,7 @@ Deno.test(async function twoOutputs(t) {
       console.error(e);
     },
   );
-  const BoxedNumber = {
-    provider: boxedNumberPool,
-  };
+  const BoxedNumber = typeSpec(boxedNumberPool);
 
   function assertPostCondition() {
     assertEquals(boxedNumberPool.acquiredCount, 0);
@@ -167,9 +164,7 @@ Deno.test(async function outputUsage(t) {
       console.error(e);
     },
   );
-  const BoxedNumber = {
-    provider: boxedNumberPool,
-  };
+  const BoxedNumber = typeSpec(boxedNumberPool);
 
   function assertPostCondition() {
     assertEquals(boxedNumberPool.acquiredCount, 0);

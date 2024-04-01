@@ -31,30 +31,42 @@ type HandleSet<T> = {
 };
 
 type ActionID = Brand<number, "actionID">;
-type Action<I, O> = {
+type Action<I extends ParamSpecSet, O extends ParamSpecSet> = {
   id: ActionID;
-  name: string | symbol | number;
-  f: (inputSet: I, outputSet: O) => void;
-  d: (plan: Plan, inputSet: HandleSet<I>) => HandleSet<O>;
-  i: ParamSpecSet<I>;
-  o: ParamSpecSet<O>;
+  name: ObjectKey;
+  f: (inputSet: InputSet<I>, outputSet: OutputSet<O>) => void;
+  d: (plan: Plan, inputSet: HandleSet<InputSet<I>>) => HandleSet<OutputSet<O>>;
+  i: I;
+  o: O;
 };
-type UntypedAction = Action<unknown, unknown>;
+type UntypedAction = {
+  id: ActionID;
+  name: ObjectKey;
+  f: (inputSet: unknown, outputSet: unknown) => void;
+  d: (plan: Plan, inputSet: unknown) => unknown;
+  i: ParamSpecSet;
+  o: ParamSpecSet;
+};
 
-function createAction<I, O>(
+function createAction<I extends ParamSpecSet, O extends ParamSpecSet>(
   generateActionID: () => ActionID,
   name: ObjectKey,
-  f: (inputSet: I, outputSet: O) => void,
-  i: ParamSpecSet<I>,
-  o: ParamSpecSet<O>,
+  f: (inputSet: InputSet<I>, outputSet: OutputSet<O>) => void,
+  i: I,
+  o: O,
 ): Action<I, O> {
   const actionID = generateActionID();
-  const d = (plan: Plan, inputSet: HandleSet<I>): HandleSet<O> => {
-    const partialOutputs: Partial<HandleSet<O>> = {};
+  const d = (
+    plan: Plan,
+    inputSet: HandleSet<InputSet<I>>,
+  ): HandleSet<OutputSet<O>> => {
+    const partialOutputs: Partial<HandleSet<OutputSet<O>>> = {};
     for (const key in o) {
-      partialOutputs[key] = plan.generateHandle() as HandleSet<O>[typeof key];
+      partialOutputs[key] = plan.generateHandle() as HandleSet<
+        OutputSet<O>
+      >[typeof key];
     }
-    const outputSet = partialOutputs as HandleSet<O>;
+    const outputSet = partialOutputs as HandleSet<OutputSet<O>>;
 
     const invocationID = plan.generateInvocationID();
     const invocation: Invocation = {
@@ -108,13 +120,22 @@ export class ContextBuilder<A> {
     );
   }
 
-  addAction<N extends ObjectKey, I, O>(
+  addAction<
+    N extends ObjectKey,
+    I extends ParamSpecSet,
+    O extends ParamSpecSet,
+  >(
     name: N,
-    i: ParamSpecSet<I>,
-    o: ParamSpecSet<O>,
-    f: (inputSet: I, outputSet: O) => void,
+    i: I,
+    o: O,
+    f: (inputSet: InputSet<I>, outputSet: OutputSet<O>) => void,
   ): ContextBuilder<
-    A & { [name in N]: (inputSet: HandleSet<I>) => HandleSet<O> }
+    & A
+    & {
+      [name in N]: (
+        inputSet: HandleSet<InputSet<I>>,
+      ) => HandleSet<OutputSet<O>>;
+    }
   > {
     if (this.#consumed) {
       throw new SubFunError("ContextBuilder is already consumed");
@@ -138,7 +159,12 @@ export class ContextBuilder<A> {
     this.#body.actions.set(name, action);
 
     return new ContextBuilder<
-      A & { [name in N]: (inputSet: HandleSet<I>) => HandleSet<O> }
+      & A
+      & {
+        [name in N]: (
+          inputSet: HandleSet<InputSet<I>>,
+        ) => HandleSet<OutputSet<O>>;
+      }
     >(this.#body);
   }
 
@@ -216,13 +242,37 @@ type IntermediateSlot = { type: "intermediate"; body: Rc<Box<unknown>> };
 type GlobalOutputSlot = { type: "global-output"; body: unknown };
 type StubOutputSlot = { type: "stub-output" };
 
-export type ParamSpecSet<T> = {
-  [key in keyof T]: TypeSpec<T[key]>;
+export type ParamSpecSet = {
+  [key: ObjectKey]: TypeSpec<unknown, unknown, unknown>;
 };
 
-export type TypeSpec<T> = {
+const inputPhantomTypeKey = Symbol("inputType");
+const outputPhantomTypeKey = Symbol("outputType");
+export type TypeSpec<T extends I & O, I, O> = {
   provider: Provider<T>;
+  [inputPhantomTypeKey]: I;
+  [outputPhantomTypeKey]: O;
 };
+
+type ProvidedType<S extends TypeSpec<unknown, unknown, unknown>> =
+  S["provider"] extends Provider<infer X> ? X : never;
+type InputType<S extends TypeSpec<unknown, unknown, unknown>> =
+  S[typeof inputPhantomTypeKey];
+type OutputType<S extends TypeSpec<unknown, unknown, unknown>> =
+  S[typeof outputPhantomTypeKey];
+
+type InputSet<S extends ParamSpecSet> = {
+  [key in keyof S]: InputType<S[key]>;
+};
+type OutputSet<S extends ParamSpecSet> = {
+  [key in keyof S]: OutputType<S[key]>;
+};
+
+export function typeSpec<T extends I & O, I = T, O = T>(
+  provider: Provider<T>,
+): TypeSpec<T, I, O> {
+  return { provider } as TypeSpec<T, I, O>;
+}
 
 function input<T>(plan: Plan, value: T): Handle<T> {
   const handle = plan.generateHandle();
@@ -430,9 +480,7 @@ function prepareDataSlots(
             if (!x.isSet) {
               return;
             }
-            const paramSpec =
-              (action.i as Record<ObjectKey, TypeSpec<unknown>>)[inputKey]; // note: very loose type casting
-            paramSpec.provider.release(x.value);
+            action.i[inputKey].provider.release(x.value);
           }, console.error),
         });
       }
@@ -524,13 +572,13 @@ function decRef<T>(plan: Plan, handle: Handle<T>): void {
   }
 }
 
-function prepareOutputSet<T>(
+function prepareOutputSet<T extends ParamSpecSet>(
   plan: Plan,
-  paramSpecSet: ParamSpecSet<T>,
-  handleSet: HandleSet<T>,
+  paramSpecSet: T,
+  handleSet: HandleSet<OutputSet<T>>,
   cleanupList: (() => void)[],
-): T {
-  const partialPrepared: Partial<T> = {};
+): OutputSet<T> {
+  const partialPrepared: Partial<OutputSet<T>> = {};
   for (const key in handleSet) {
     partialPrepared[key] = prepareOutput(
       plan,
@@ -540,16 +588,16 @@ function prepareOutputSet<T>(
       cleanupList,
     );
   }
-  return partialPrepared as T;
+  return partialPrepared as OutputSet<T>;
 }
 
-function prepareOutput<T, K extends keyof T>(
+function prepareOutput<T extends ParamSpecSet, K extends keyof T>(
   plan: Plan,
-  paramSpecSet: ParamSpecSet<T>,
-  handleSet: HandleSet<T>,
+  paramSpecSet: T,
+  handleSet: HandleSet<OutputSet<T>>,
   key: K,
   cleanupList: (() => void)[],
-): T[K] {
+): OutputType<T[K]> {
   const handle = handleSet[key];
   const dataSlot = plan.dataSlots.get(handle);
   if (dataSlot == null) {
