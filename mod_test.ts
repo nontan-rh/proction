@@ -278,13 +278,14 @@ Deno.test(function calcIO() {
       ({ l, r }, { result }) => result.setValue(l.getValue() * r.getValue()),
     ).build();
 
-  const [input1Reader, input1Writer] = pipeBox<number>();
-  input1Writer.setValue(1);
+  const [input1R, input1W] = pipeBox<number>();
+  input1W.setValue(1);
   const input2RW = pipeBoxRW<number>();
   input2RW.setValue(2);
-  const [resultReader, resultWriter] = pipeBox<number>();
+  const [result1R, result1W] = pipeBox<number>();
+  const result2RW = pipeBoxRW<number>();
   ctx.run(({ input, output, actions: { add, mul } }) => {
-    const input1 = input(input1Reader);
+    const input1 = input(input1R);
     const input2 = input(input2RW);
     const input3 = input(pipeBoxR(3));
     const input4 = input(pipeBoxR(4));
@@ -294,12 +295,15 @@ Deno.test(function calcIO() {
     const { result: result2 } = add({ l: input3, r: input4 }, {});
     const { result: result3 } = mul({ l: result1, r: result2 }, {});
 
-    const result = output(resultWriter);
+    const result1Handle = output(result1W);
+    const result2Handle = output(result2RW);
 
-    add({ l: result3, r: input5 }, { result });
+    add({ l: result3, r: input5 }, { result: result1Handle });
+    mul({ l: result3, r: input5 }, { result: result2Handle });
   }, { assertNoLeak: true });
 
-  assertEquals(resultReader.getValue(), 26);
+  assertEquals(result1R.getValue(), 26);
+  assertEquals(result2RW.getValue(), 105);
   assertEquals(boxedNumberPool.acquiredCount, 0);
   assertGreater(boxedNumberPool.pooledCount, 0);
   assertEquals(boxedNumberPool.taintedCount, 0);
