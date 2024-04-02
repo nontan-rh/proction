@@ -35,10 +35,10 @@ type Action<I extends ParamSpecSet, O extends ParamSpecSet> = {
   id: ActionID;
   name: ObjectKey;
   f: (inputSet: InputSet<I>, outputSet: OutputSet<O>) => void;
-  d: <G extends Partial<HandleSet<OutputSet<O>>>>(
+  d: <G extends Partial<HandleSet<OutputSet<O>>> | undefined>(
     plan: Plan,
     inputSet: HandleSet<InputSet<I>>,
-    globalOutputSet: G,
+    globalOutputSet?: G & Record<Exclude<keyof G, keyof O>, never>,
   ) => Omit<HandleSet<InputSet<O>>, keyof G>;
   i: I;
   o: O;
@@ -47,7 +47,7 @@ type UntypedAction = {
   id: ActionID;
   name: ObjectKey;
   f: (inputSet: unknown, outputSet: unknown) => void;
-  d: (plan: Plan, inputSet: unknown, globalOutputSet: unknown) => unknown;
+  d: (plan: Plan, inputSet: unknown, globalOutputSet?: unknown) => unknown;
   i: ParamSpecSet;
   o: ParamSpecSet;
 };
@@ -60,10 +60,11 @@ function createAction<I extends ParamSpecSet, O extends ParamSpecSet>(
   o: O,
 ): Action<I, O> {
   const actionID = generateActionID();
-  const d = <G extends Partial<HandleSet<OutputSet<O>>>>(
+  const d = <G extends Partial<HandleSet<OutputSet<O>>> | undefined>(
     plan: Plan,
     inputSet: HandleSet<InputSet<I>>,
-    globalOutputSet: G,
+    globalOutputSet?: G, // TODO: Enable this restriction
+    /* & Record<Exclude<keyof G, keyof O>, never> */
   ): Omit<HandleSet<InputSet<O>>, keyof G> => {
     const partialOutputs: Partial<HandleSet<OutputSet<O>>> = {};
     const partialReturnOutputs: Partial<HandleSet<OutputSet<O>>> = {};
@@ -153,9 +154,9 @@ export class ContextBuilder<A> {
   ): ContextBuilder<
     & A
     & {
-      [name in N]: <G extends Partial<HandleSet<OutputSet<O>>>>(
+      [name in N]: <G extends (Partial<HandleSet<OutputSet<O>>> | undefined)>(
         inputSet: HandleSet<InputSet<I>>,
-        globalOutputSet: G,
+        globalOutputSet?: G & Record<Exclude<keyof G, keyof O>, never>,
       ) => Omit<HandleSet<InputSet<O>>, keyof G>;
     }
   > {
@@ -183,9 +184,9 @@ export class ContextBuilder<A> {
     return new ContextBuilder<
       & A
       & {
-        [name in N]: <G extends Partial<HandleSet<OutputSet<O>>>>(
+        [name in N]: <G extends Partial<HandleSet<OutputSet<O>>> | undefined>(
           inputSet: HandleSet<InputSet<I>>,
-          globalOutputSet: G,
+          globalOutputSet?: G & Record<Exclude<keyof G, keyof O>, never>,
         ) => Omit<HandleSet<InputSet<O>>, keyof G>;
       }
     >(this.#body);
@@ -219,7 +220,7 @@ export class Context<A> {
     for (const action of this.#actions.values()) {
       boundActions[action.name] = (
         inputSet: HandleSet<unknown>,
-        globalOutputSet: HandleSet<unknown>,
+        globalOutputSet?: HandleSet<unknown>,
       ) => action.d(plan, inputSet, globalOutputSet);
     }
     const runParams: PlanFnParams<A> = {

@@ -4,15 +4,17 @@ import {
   assertGreater,
   assertGreaterOrEqual,
 } from "./deps.ts";
-import { ContextBuilder } from "./mod.ts";
+import { ContextBuilder, typeSpec } from "./mod.ts";
 import { Pool } from "./pool.ts";
 import { Box } from "./box.ts";
-import { typeSpec } from "./mod.ts";
-import { IPipeBoxR, IPipeBoxW } from "./pipebox.ts";
-import { pipeBox } from "./pipebox.ts";
-import { IPipeBoxRW } from "./pipebox.ts";
-import { pipeBoxRW } from "./pipebox.ts";
-import { pipeBoxR } from "./pipebox.ts";
+import {
+  IPipeBoxR,
+  IPipeBoxRW,
+  IPipeBoxW,
+  pipeBox,
+  pipeBoxR,
+  pipeBoxRW,
+} from "./pipebox.ts";
 
 Deno.test(function calc() {
   let errorReported = false;
@@ -50,9 +52,9 @@ Deno.test(function calc() {
 
     const result = output(resultBody);
 
-    const { result: result1 } = add({ l: input1, r: input2 }, {});
-    const { result: result2 } = add({ l: input3, r: input4 }, {});
-    const { result: result3 } = mul({ l: result1, r: result2 }, {});
+    const { result: result1 } = add({ l: input1, r: input2 });
+    const { result: result2 } = add({ l: input3, r: input4 });
+    const { result: result3 } = mul({ l: result1, r: result2 });
     add({ l: result3, r: input5 }, { result });
   }, { assertNoLeak: true });
 
@@ -149,7 +151,7 @@ Deno.test(async function twoOutputs(t) {
 
       const result = output(resultBody);
 
-      const { mod } = divmod({ l: input1, r: input2 }, {});
+      const { mod } = divmod({ l: input1, r: input2 });
       add({ l: mod, r: input3 }, { result });
     }, { assertNoLeak: true });
 
@@ -196,8 +198,8 @@ Deno.test(async function outputUsage(t) {
       const input1 = input(Box.withValue(42));
       const input2 = input(Box.withValue(5));
 
-      add({ l: input1, r: input2 }, {});
-      mul({ l: input1, r: input2 }, {});
+      add({ l: input1, r: input2 });
+      mul({ l: input1, r: input2 });
     }, { assertNoLeak: true });
 
     assertPostCondition();
@@ -216,7 +218,7 @@ Deno.test(async function outputUsage(t) {
       const result1 = output(result1Body);
       const result2 = output(result2Body);
 
-      const { result: sum } = add({ l: input1, r: input2 }, {});
+      const { result: sum } = add({ l: input1, r: input2 });
       mul({ l: sum, r: input3 }, { result: result1 });
       add({ l: sum, r: input4 }, { result: result2 });
     }, { assertNoLeak: true });
@@ -291,9 +293,9 @@ Deno.test(function calcIO() {
     const input4 = input(pipeBoxR(4));
     const input5 = input(pipeBoxR(5));
 
-    const { result: result1 } = add({ l: input1, r: input2 }, {});
-    const { result: result2 } = add({ l: input3, r: input4 }, {});
-    const { result: result3 } = mul({ l: result1, r: result2 }, {});
+    const { result: result1 } = add({ l: input1, r: input2 });
+    const { result: result2 } = add({ l: input3, r: input4 });
+    const { result: result3 } = mul({ l: result1, r: result2 });
 
     const result1Handle = output(result1W);
     const result2Handle = output(result2RW);
