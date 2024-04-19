@@ -18,10 +18,65 @@ function idGenerator<T>(transform: (x: number) => T): () => T {
   };
 }
 
-const handleMarkKey = Symbol("handleMark");
+const parentPlanKey = Symbol("parentPlan");
+const handleIdKey = Symbol("handleId");
 const phantomDataKey = Symbol("phantomData");
-type Handle<T> = number & { [handleMarkKey]: never; [phantomDataKey]: () => T };
+type HandleId = Brand<number, "handleID">;
+type Handle<T> = {
+  [parentPlanKey]: Plan;
+  [handleIdKey]: HandleId;
+  [phantomDataKey]: () => T;
+};
 type UntypedHandle = Handle<unknown>;
+
+function isHandle(
+  x: UntypedHandle | (Record<ObjectKey, UntypedHandle>),
+): x is UntypedHandle {
+  return parentPlanKey in x;
+}
+
+export function getPlan(
+  head:
+    | UntypedHandle
+    | (Record<ObjectKey, UntypedHandle>),
+  ...tail: (
+    | UntypedHandle
+    | (Record<ObjectKey, UntypedHandle>)
+  )[]
+): Plan {
+  let plan: Plan | undefined;
+  if (isHandle(head)) {
+    plan = head[parentPlanKey];
+  } else {
+    for (const k in head) {
+      const p = head[k][parentPlanKey];
+      if (plan != null && p !== plan) {
+        throw new SubFunError("Plan inconsitent");
+      }
+      plan = p;
+    }
+  }
+
+  for (const t of tail) {
+    if (isHandle(t)) {
+      plan = t[parentPlanKey];
+    } else {
+      for (const k in t) {
+        const p = t[k][parentPlanKey];
+        if (plan != null && p !== plan) {
+          throw new SubFunError("Plan inconsitent");
+        }
+        plan = p;
+      }
+    }
+  }
+
+  if (plan == null) {
+    throw new SubFunError("Failed to detect plan");
+  }
+
+  return plan;
+}
 
 type UntypedHandleSet<T> = {
   [key in keyof T]: UntypedHandle;
@@ -239,13 +294,21 @@ type PlanFnParams<A> = {
   actions: A;
 };
 
+const undefinedFn = () => {};
+
 class Plan {
   actions: Map<ActionID, UntypedAction>;
 
   state: PlanState;
 
-  generateHandle = idGenerator((value) => (value as UntypedHandle));
-  dataSlots = new Map<UntypedHandle, DataSlot>();
+  generateHandle: () => UntypedHandle = idGenerator((
+    value,
+  ) => ({
+    [parentPlanKey]: this,
+    [handleIdKey]: value as HandleId,
+    [phantomDataKey]: undefinedFn,
+  }));
+  dataSlots = new Map<HandleId, DataSlot>();
 
   generateInvocationID = idGenerator((value) => value as InvocationID);
   invocations = new Map<InvocationID, Invocation>();
@@ -302,13 +365,19 @@ export function typeSpec<T extends I & O, I = T, O = T>(
 
 function input<T>(plan: Plan, value: T): Handle<T> {
   const handle = plan.generateHandle();
-  plan.dataSlots.set(handle, { type: "global-input", body: value });
+  plan.dataSlots.set(handle[handleIdKey], {
+    type: "global-input",
+    body: value,
+  });
   return handle as Handle<T>;
 }
 
 function output<T>(plan: Plan, value: T): Handle<T> {
   const handle = plan.generateHandle();
-  plan.dataSlots.set(handle, { type: "global-output", body: value });
+  plan.dataSlots.set(handle[handleIdKey], {
+    type: "global-output",
+    body: value,
+  });
   return handle as Handle<T>;
 }
 
@@ -381,14 +450,14 @@ function prepareInvocations(
 
   const result: Invocation[] = [];
 
-  const outputToInvocation = new Map<UntypedHandle, Invocation>();
+  const outputToInvocation = new Map<HandleId, Invocation>();
   for (const invocation of plan.invocations.values()) {
     for (const outputKey in invocation.outputSet) {
       const output = invocation.outputSet[outputKey];
-      if (outputToInvocation.has(output)) {
+      if (outputToInvocation.has(output[handleIdKey])) {
         throw new SubFunLogicError("the output have two parent invocations");
       }
-      outputToInvocation.set(output, invocation);
+      outputToInvocation.set(output[handleIdKey], invocation);
     }
   }
 
@@ -406,7 +475,7 @@ function prepareInvocations(
     visitedInvocations.set(invocationID, "temporary");
 
     for (const inputKey in invocation.inputSet) {
-      visitHandle(invocation.inputSet[inputKey]);
+      visitHandle(invocation.inputSet[inputKey][handleIdKey]);
     }
 
     visitedInvocations.set(invocationID, "permanent");
@@ -414,8 +483,8 @@ function prepareInvocations(
     result.unshift(invocation);
   }
 
-  function visitHandle(handle: UntypedHandle): void {
-    const dataSlot = plan.dataSlots.get(handle);
+  function visitHandle(handleId: HandleId): void {
+    const dataSlot = plan.dataSlots.get(handleId);
     if (dataSlot != null) {
       const type = dataSlot.type;
       switch (type) {
@@ -432,22 +501,22 @@ function prepareInvocations(
       }
     }
 
-    const parentInvocation = outputToInvocation.get(handle);
+    const parentInvocation = outputToInvocation.get(handleId);
     if (parentInvocation == null) {
       throw new SubFunLogicError(
-        `parent invocation not found for handle: ${handle}`,
+        `parent invocation not found for handle: ${handleId}`,
       );
     }
 
     visitInvocation(parentInvocation);
   }
 
-  for (const handle of plan.dataSlots.keys()) {
-    const dataSlot = plan.dataSlots.get(handle);
+  for (const handleId of plan.dataSlots.keys()) {
+    const dataSlot = plan.dataSlots.get(handleId);
     if (dataSlot == null || dataSlot.type !== "global-output") {
       continue;
     }
-    visitHandle(handle);
+    visitHandle(handleId);
   }
 
   return result;
@@ -466,7 +535,7 @@ function prepareDataSlots(
       }
 
       const input = invocation.inputSet[inputKey];
-      const dataSlot = plan.dataSlots.get(input);
+      const dataSlot = plan.dataSlots.get(input[handleIdKey]);
       if (dataSlot != null) {
         const type = dataSlot.type;
         switch (type) {
@@ -483,7 +552,7 @@ function prepareDataSlots(
             throw new SubFunLogicError(`unknown data slot type: ${type}`);
         }
       } else {
-        plan.dataSlots.set(input, {
+        plan.dataSlots.set(input[handleIdKey], {
           type: "intermediate",
           body: new Rc(new Box(), (x) => {
             if (!x.isSet) {
@@ -505,9 +574,9 @@ function prepareDataSlots(
       }
 
       const output = invocation.outputSet[outputKey];
-      const dataSlot = plan.dataSlots.get(output);
+      const dataSlot = plan.dataSlots.get(output[handleIdKey]);
       if (dataSlot == null) {
-        plan.dataSlots.set(output, { type: "stub-output" });
+        plan.dataSlots.set(output[handleIdKey], { type: "stub-output" });
       }
     }
   }
@@ -522,7 +591,7 @@ function restoreSet<T>(plan: Plan, handleSet: HandleSet<T>): T {
 }
 
 function restore<T>(plan: Plan, handle: Handle<T>): T {
-  const dataSlot = plan.dataSlots.get(handle);
+  const dataSlot = plan.dataSlots.get(handle[handleIdKey]);
   if (dataSlot == null) {
     throw new SubFunLogicError(
       `datum not saved for handle: ${handle}`,
@@ -558,7 +627,7 @@ function decRefSet<T>(plan: Plan, handleSet: HandleSet<T>): void {
 }
 
 function decRef<T>(plan: Plan, handle: Handle<T>): void {
-  const dataSlot = plan.dataSlots.get(handle);
+  const dataSlot = plan.dataSlots.get(handle[handleIdKey]);
   if (dataSlot == null) {
     throw new SubFunLogicError(
       `data slot not saved for handle: ${handle}`,
@@ -608,7 +677,7 @@ function prepareOutput<T extends ParamSpecSet, K extends keyof T>(
   cleanupList: (() => void)[],
 ): OutputType<T[K]> {
   const handle = handleSet[key];
-  const dataSlot = plan.dataSlots.get(handle);
+  const dataSlot = plan.dataSlots.get(handle[handleIdKey]);
   if (dataSlot == null) {
     throw new SubFunLogicError("data slot not found");
   }
