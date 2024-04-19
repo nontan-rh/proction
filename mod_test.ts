@@ -4,7 +4,7 @@ import {
   assertGreater,
   assertGreaterOrEqual,
 } from "./deps.ts";
-import { ContextBuilder, typeSpec } from "./mod.ts";
+import { action, Context, purify, typeSpec } from "./mod.ts";
 import { Pool } from "./pool.ts";
 import { Box } from "./box.ts";
 import {
@@ -29,21 +29,22 @@ Deno.test(function calc() {
   );
   const BoxedNumber = typeSpec(boxedNumberPool);
 
-  const ctx = ContextBuilder.empty()
-    .addAction(
-      "add",
-      { l: BoxedNumber, r: BoxedNumber },
-      { result: BoxedNumber },
-      ({ l, r }, { result }) => result.value = l.value + r.value,
-    ).addAction(
-      "mul",
-      { l: BoxedNumber, r: BoxedNumber },
-      { result: BoxedNumber },
-      ({ l, r }, { result }) => result.value = l.value * r.value,
-    ).build();
+  const add = action(
+    { l: BoxedNumber, r: BoxedNumber },
+    { result: BoxedNumber },
+    ({ l, r }, { result }) => result.value = l.value + r.value,
+  );
+  const pureAdd = purify(add);
+  const mul = action(
+    { l: BoxedNumber, r: BoxedNumber },
+    { result: BoxedNumber },
+    ({ l, r }, { result }) => result.value = l.value * r.value,
+  );
+  const pureMul = purify(mul);
 
   const resultBody = new Box<number>();
-  ctx.run(({ input, output, actions: { add, mul } }) => {
+
+  new Context().run(({ input, output }) => {
     const input1 = input(Box.withValue(1));
     const input2 = input(Box.withValue(2));
     const input3 = input(Box.withValue(3));
@@ -52,9 +53,9 @@ Deno.test(function calc() {
 
     const result = output(resultBody);
 
-    const { result: result1 } = add({ l: input1, r: input2 });
-    const { result: result2 } = add({ l: input3, r: input4 });
-    const { result: result3 } = mul({ l: result1, r: result2 });
+    const { result: result1 } = pureAdd({ l: input1, r: input2 });
+    const { result: result2 } = pureAdd({ l: input3, r: input4 });
+    const { result: result3 } = pureMul({ l: result1, r: result2 });
     add({ l: result3, r: input5 }, { result });
   }, { assertNoLeak: true });
 
@@ -66,8 +67,7 @@ Deno.test(function calc() {
 });
 
 Deno.test(function empty() {
-  const ctx = ContextBuilder.empty().build();
-  ctx.run(() => {}, { assertNoLeak: true });
+  new Context().run(() => {}, { assertNoLeak: true });
 });
 
 Deno.test(async function twoOutputs(t) {
@@ -90,27 +90,26 @@ Deno.test(async function twoOutputs(t) {
     assertFalse(errorReported);
   }
 
-  const ctx = ContextBuilder.empty()
-    .addAction(
-      "divmod",
-      { l: BoxedNumber, r: BoxedNumber },
-      { div: BoxedNumber, mod: BoxedNumber },
-      ({ l, r }, { div, mod }) => {
-        div.value = Math.floor(l.value / r.value);
-        mod.value = l.value % r.value;
-      },
-    ).addAction(
-      "add",
-      { l: BoxedNumber, r: BoxedNumber },
-      { result: BoxedNumber },
-      ({ l, r }, { result }) => result.value = l.value + r.value,
-    ).build();
+  const divmod = action(
+    { l: BoxedNumber, r: BoxedNumber },
+    { div: BoxedNumber, mod: BoxedNumber },
+    ({ l, r }, { div, mod }) => {
+      div.value = Math.floor(l.value / r.value);
+      mod.value = l.value % r.value;
+    },
+  );
+  const pureDivmod = purify(divmod);
+  const add = action(
+    { l: BoxedNumber, r: BoxedNumber },
+    { result: BoxedNumber },
+    ({ l, r }, { result }) => result.value = l.value + r.value,
+  );
 
   await t.step(function bothOutputsAreGlobal() {
     const divBody = new Box<number>();
     const modBody = new Box<number>();
 
-    ctx.run(({ input, output, actions: { divmod } }) => {
+    new Context().run(({ input, output }) => {
       const input1 = input(Box.withValue(42));
       const input2 = input(Box.withValue(5));
 
@@ -125,33 +124,17 @@ Deno.test(async function twoOutputs(t) {
     assertPostCondition();
   });
 
-  await t.step(function divOutputIsGlobal() {
-    const divBody = new Box<number>();
-
-    ctx.run(({ input, output, actions: { divmod } }) => {
-      const input1 = input(Box.withValue(42));
-      const input2 = input(Box.withValue(5));
-
-      const div = output(divBody);
-
-      divmod({ l: input1, r: input2 }, { div });
-    }, { assertNoLeak: true });
-
-    assertEquals(divBody.value, 8);
-    assertPostCondition();
-  });
-
   await t.step(function modOutputIsIntermediate() {
     const resultBody = new Box<number>();
 
-    ctx.run(({ input, output, actions: { divmod, add } }) => {
+    new Context().run(({ input, output }) => {
       const input1 = input(Box.withValue(42));
       const input2 = input(Box.withValue(5));
       const input3 = input(Box.withValue(100));
 
       const result = output(resultBody);
 
-      const { mod } = divmod({ l: input1, r: input2 });
+      const { mod } = pureDivmod({ l: input1, r: input2 });
       add({ l: mod, r: input3 }, { result });
     }, { assertNoLeak: true });
 
@@ -180,26 +163,26 @@ Deno.test(async function outputUsage(t) {
     assertFalse(errorReported);
   }
 
-  const ctx = ContextBuilder.empty()
-    .addAction(
-      "add",
-      { l: BoxedNumber, r: BoxedNumber },
-      { result: BoxedNumber },
-      ({ l, r }, { result }) => result.value = l.value + r.value,
-    ).addAction(
-      "mul",
-      { l: BoxedNumber, r: BoxedNumber },
-      { result: BoxedNumber },
-      ({ l, r }, { result }) => result.value = l.value * r.value,
-    ).build();
+  const add = action(
+    { l: BoxedNumber, r: BoxedNumber },
+    { result: BoxedNumber },
+    ({ l, r }, { result }) => result.value = l.value + r.value,
+  );
+  const pureAdd = purify(add);
+  const mul = action(
+    { l: BoxedNumber, r: BoxedNumber },
+    { result: BoxedNumber },
+    ({ l, r }, { result }) => result.value = l.value * r.value,
+  );
+  const pureMul = purify(mul);
 
   await t.step(function noOutputsAreUsed() {
-    ctx.run(({ input, actions: { add, mul } }) => {
+    new Context().run(({ input }) => {
       const input1 = input(Box.withValue(42));
       const input2 = input(Box.withValue(5));
 
-      add({ l: input1, r: input2 });
-      mul({ l: input1, r: input2 });
+      pureAdd({ l: input1, r: input2 });
+      pureMul({ l: input1, r: input2 });
     }, { assertNoLeak: true });
 
     assertPostCondition();
@@ -209,7 +192,7 @@ Deno.test(async function outputUsage(t) {
     const result1Body = new Box<number>();
     const result2Body = new Box<number>();
 
-    ctx.run(({ input, output, actions: { add, mul } }) => {
+    new Context().run(({ input, output }) => {
       const input1 = input(Box.withValue(42));
       const input2 = input(Box.withValue(2));
       const input3 = input(Box.withValue(3));
@@ -218,7 +201,7 @@ Deno.test(async function outputUsage(t) {
       const result1 = output(result1Body);
       const result2 = output(result2Body);
 
-      const { result: sum } = add({ l: input1, r: input2 });
+      const { result: sum } = pureAdd({ l: input1, r: input2 });
       mul({ l: sum, r: input3 }, { result: result1 });
       add({ l: sum, r: input4 }, { result: result2 });
     }, { assertNoLeak: true });
@@ -232,7 +215,7 @@ Deno.test(async function outputUsage(t) {
     const sumBody = new Box<number>();
     const resultBody = new Box<number>();
 
-    ctx.run(({ input, output, actions: { add, mul } }) => {
+    new Context().run(({ input, output }) => {
       const input1 = input(Box.withValue(42));
       const input2 = input(Box.withValue(2));
       const input3 = input(Box.withValue(3));
@@ -267,18 +250,18 @@ Deno.test(function calcIO() {
     IPipeBoxW<number>
   >(boxedNumberPool);
 
-  const ctx = ContextBuilder.empty()
-    .addAction(
-      "add",
-      { l: BoxedNumber, r: BoxedNumber },
-      { result: BoxedNumber },
-      ({ l, r }, { result }) => result.setValue(l.getValue() + r.getValue()),
-    ).addAction(
-      "mul",
-      { l: BoxedNumber, r: BoxedNumber },
-      { result: BoxedNumber },
-      ({ l, r }, { result }) => result.setValue(l.getValue() * r.getValue()),
-    ).build();
+  const add = action(
+    { l: BoxedNumber, r: BoxedNumber },
+    { result: BoxedNumber },
+    ({ l, r }, { result }) => result.setValue(l.getValue() + r.getValue()),
+  );
+  const pureAdd = purify(add);
+  const mul = action(
+    { l: BoxedNumber, r: BoxedNumber },
+    { result: BoxedNumber },
+    ({ l, r }, { result }) => result.setValue(l.getValue() * r.getValue()),
+  );
+  const pureMul = purify(mul);
 
   const [input1R, input1W] = pipeBox<number>();
   input1W.setValue(1);
@@ -286,16 +269,16 @@ Deno.test(function calcIO() {
   input2RW.setValue(2);
   const [result1R, result1W] = pipeBox<number>();
   const result2RW = pipeBoxRW<number>();
-  ctx.run(({ input, output, actions: { add, mul } }) => {
+  new Context().run(({ input, output }) => {
     const input1 = input(input1R);
     const input2 = input(input2RW);
     const input3 = input(pipeBoxR(3));
     const input4 = input(pipeBoxR(4));
     const input5 = input(pipeBoxR(5));
 
-    const { result: result1 } = add({ l: input1, r: input2 });
-    const { result: result2 } = add({ l: input3, r: input4 });
-    const { result: result3 } = mul({ l: result1, r: result2 });
+    const { result: result1 } = pureAdd({ l: input1, r: input2 });
+    const { result: result2 } = pureAdd({ l: input3, r: input4 });
+    const { result: result3 } = pureMul({ l: result1, r: result2 });
 
     const result1Handle = output(result1W);
     const result2Handle = output(result2RW);

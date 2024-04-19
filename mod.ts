@@ -85,220 +85,109 @@ type HandleSet<T> = {
   [key in keyof T]: Handle<T[key]>;
 };
 
-type ActionID = Brand<number, "actionID">;
 type Action<I extends ParamSpecSet, O extends ParamSpecSet> = {
-  id: ActionID;
-  name: ObjectKey;
   f: (inputSet: InputSet<I>, outputSet: OutputSet<O>) => void;
-  d: <G extends Partial<HandleSet<OutputSet<O>>> | undefined>(
-    plan: Plan,
-    inputSet: HandleSet<InputSet<I>>,
-    globalOutputSet?: G & Record<Exclude<keyof G, keyof O>, never>,
-  ) => Omit<HandleSet<InputSet<O>>, keyof G>;
   i: I;
   o: O;
 };
 type UntypedAction = {
-  id: ActionID;
-  name: ObjectKey;
   f: (inputSet: unknown, outputSet: unknown) => void;
-  d: (plan: Plan, inputSet: unknown, globalOutputSet?: unknown) => unknown;
   i: ParamSpecSet;
   o: ParamSpecSet;
 };
 
-function createAction<I extends ParamSpecSet, O extends ParamSpecSet>(
-  generateActionID: () => ActionID,
-  name: ObjectKey,
-  f: (inputSet: InputSet<I>, outputSet: OutputSet<O>) => void,
+const actionKey = Symbol("action");
+export function action<I extends ParamSpecSet, O extends ParamSpecSet>(
   i: I,
   o: O,
-): Action<I, O> {
-  const actionID = generateActionID();
-  const d = <G extends Partial<HandleSet<OutputSet<O>>> | undefined>(
-    plan: Plan,
+  f: (inputSet: InputSet<I>, outputSet: OutputSet<O>) => void,
+):
+  & ((
     inputSet: HandleSet<InputSet<I>>,
-    globalOutputSet?: G, // TODO: Enable this restriction
-    /* & Record<Exclude<keyof G, keyof O>, never> */
-  ): Omit<HandleSet<InputSet<O>>, keyof G> => {
-    const partialOutputs: Partial<HandleSet<OutputSet<O>>> = {};
-    const partialReturnOutputs: Partial<HandleSet<OutputSet<O>>> = {};
+    outputSet: HandleSet<OutputSet<O>>,
+  ) => void)
+  & { [actionKey]: Action<I, O> } {
+  const action: Action<I, O> = {
+    f,
+    i,
+    o,
+  };
 
-    for (const key in globalOutputSet) {
-      partialOutputs[key] = globalOutputSet[key];
-    }
+  const g = (
+    inputSet: HandleSet<InputSet<I>>,
+    outputSet: HandleSet<OutputSet<O>>,
+  ) => {
+    const plan = getPlan(inputSet, outputSet);
 
-    for (const key in o) {
-      if (key in partialOutputs) {
-        continue;
-      }
-
-      const handle = plan.generateHandle() as HandleSet<
-        OutputSet<O>
-      >[typeof key];
-      partialReturnOutputs[key] = handle;
-      partialOutputs[key] = handle;
-    }
-    const outputSet = partialOutputs as HandleSet<OutputSet<O>>;
-    const returnOutputs = partialReturnOutputs as Omit<
-      HandleSet<InputSet<O>>,
-      keyof G
-    >;
-
-    const invocationID = plan.generateInvocationID();
+    const id = plan.generateInvocationID();
     const invocation: Invocation = {
-      id: invocationID,
-      actionID,
+      id,
+      action: action as UntypedAction,
       inputSet,
       outputSet,
     };
     plan.invocations.set(invocation.id, invocation);
-
-    return returnOutputs;
   };
+  g[actionKey] = action;
 
-  return {
-    id: actionID,
-    name,
-    f,
-    d,
-    i,
-    o,
+  return g;
+}
+
+export function purify<I extends ParamSpecSet, O extends ParamSpecSet>(
+  rawAction:
+    & ((
+      inputSet: HandleSet<InputSet<I>>,
+      outputSet: HandleSet<OutputSet<O>>,
+    ) => void)
+    & { [actionKey]: Action<I, O> },
+): (inputSet: HandleSet<InputSet<I>>) => HandleSet<InputSet<O>> {
+  const action = rawAction[actionKey];
+  return (inputSet: HandleSet<InputSet<I>>): HandleSet<InputSet<O>> => {
+    const plan = getPlan(inputSet);
+
+    const partialOutputSet: Partial<HandleSet<OutputSet<O>>> = {};
+    for (const key in action.o) {
+      const handle = plan.generateHandle() as HandleSet<
+        OutputSet<O>
+      >[typeof key];
+      partialOutputSet[key] = handle;
+    }
+    const outputSet = partialOutputSet as HandleSet<OutputSet<O>>;
+
+    rawAction(inputSet, outputSet);
+
+    return outputSet;
   };
 }
 
 type InvocationID = Brand<number, "invocationID">;
 type Invocation = {
   id: InvocationID;
-  actionID: ActionID;
+  action: UntypedAction;
   inputSet: Record<ObjectKey, UntypedHandle>;
   outputSet: Record<ObjectKey, UntypedHandle>;
 };
 
-type ContextBuilderBody = {
-  generateActionID: () => ActionID;
-  actions: Map<ObjectKey, UntypedAction>;
-};
-
-export class ContextBuilder<A> {
-  #body: ContextBuilderBody;
-  #consumed = false;
-
-  constructor(body: ContextBuilderBody) {
-    this.#body = body;
-  }
-
-  static empty(): ContextBuilder<Record<ObjectKey, never>> {
-    return new ContextBuilder<Record<ObjectKey, never>>(
-      {
-        generateActionID: idGenerator((value) => value as ActionID),
-        actions: new Map<ObjectKey, UntypedAction>(),
-      },
-    );
-  }
-
-  addAction<
-    N extends ObjectKey,
-    I extends ParamSpecSet,
-    O extends ParamSpecSet,
-  >(
-    name: N,
-    i: I,
-    o: O,
-    f: (inputSet: InputSet<I>, outputSet: OutputSet<O>) => void,
-  ): ContextBuilder<
-    & A
-    & {
-      [name in N]: <G extends (Partial<HandleSet<OutputSet<O>>> | undefined)>(
-        inputSet: HandleSet<InputSet<I>>,
-        globalOutputSet?: G & Record<Exclude<keyof G, keyof O>, never>,
-      ) => Omit<HandleSet<InputSet<O>>, keyof G>;
-    }
-  > {
-    if (this.#consumed) {
-      throw new SubFunError("ContextBuilder is already consumed");
-    }
-    if (this.#body.actions.has(name)) {
-      throw new SubFunError(
-        `action with name (${
-          String(name)
-        }) is already registered to ContextBuilder`,
-      );
-    }
-    this.#consumed = true;
-
-    const action = createAction(
-      this.#body.generateActionID,
-      name,
-      f,
-      i,
-      o,
-    ) as UntypedAction;
-    this.#body.actions.set(name, action);
-
-    return new ContextBuilder<
-      & A
-      & {
-        [name in N]: <G extends Partial<HandleSet<OutputSet<O>>> | undefined>(
-          inputSet: HandleSet<InputSet<I>>,
-          globalOutputSet?: G & Record<Exclude<keyof G, keyof O>, never>,
-        ) => Omit<HandleSet<InputSet<O>>, keyof G>;
-      }
-    >(this.#body);
-  }
-
-  build(): Context<A> {
-    if (this.#consumed) {
-      throw new SubFunError("ContextBuilder is already consumed");
-    }
-    this.#consumed = true;
-
-    const actions = new Map<ActionID, UntypedAction>();
-    for (const action of this.#body.actions.values()) {
-      actions.set(action.id, action);
-    }
-
-    return new Context(actions);
-  }
-}
-
-export class Context<A> {
-  #actions = new Map<ActionID, UntypedAction>();
-
-  constructor(actions: Map<ActionID, UntypedAction>) {
-    this.#actions = actions;
-  }
-
-  run(planFn: (p: PlanFnParams<A>) => void, options?: RunOptions) {
-    const plan = new Plan(this.#actions);
-    const boundActions: Record<ObjectKey, unknown> = {};
-    for (const action of this.#actions.values()) {
-      boundActions[action.name] = (
-        inputSet: HandleSet<unknown>,
-        globalOutputSet?: HandleSet<unknown>,
-      ) => action.d(plan, inputSet, globalOutputSet);
-    }
-    const runParams: PlanFnParams<A> = {
+export class Context {
+  run(planFn: (p: PlanFnParams) => void, options?: RunOptions) {
+    const plan = new Plan();
+    const runParams: PlanFnParams = {
       input: (value) => input(plan, value),
       output: (value) => output(plan, value),
-      actions: boundActions as A,
     };
     planFn(runParams);
     run(plan, options);
   }
 }
 
-type PlanFnParams<A> = {
+type PlanFnParams = {
   input<T>(value: T): Handle<T>;
   output<T>(value: T): Handle<T>;
-  actions: A;
 };
 
 const undefinedFn = () => {};
 
 class Plan {
-  actions: Map<ActionID, UntypedAction>;
-
   state: PlanState;
 
   generateHandle: () => UntypedHandle = idGenerator((
@@ -313,8 +202,7 @@ class Plan {
   generateInvocationID = idGenerator((value) => value as InvocationID);
   invocations = new Map<InvocationID, Invocation>();
 
-  constructor(actions: Map<ActionID, UntypedAction>) {
-    this.actions = actions;
+  constructor() {
     this.state = "initial";
   }
 }
@@ -411,7 +299,7 @@ function run(
 
     for (let i = invocations.length - 1; i >= 0; i--) {
       const invocation = invocations[i];
-      const action = plan.actions.get(invocation.actionID);
+      const action = invocation.action;
       if (action == null) {
         throw new SubFunLogicError("action not found");
       }
@@ -528,12 +416,11 @@ function prepareDataSlots(
 ): void {
   // prepare intermediate inputs
   for (const invocation of invocations) {
+    const action = invocation.action;
+    if (action == null) {
+      throw new SubFunLogicError("action not found");
+    }
     for (const inputKey in invocation.inputSet) {
-      const action = plan.actions.get(invocation.actionID);
-      if (action == null) {
-        throw new SubFunLogicError("action not found");
-      }
-
       const input = invocation.inputSet[inputKey];
       const dataSlot = plan.dataSlots.get(input[handleIdKey]);
       if (dataSlot != null) {
@@ -567,12 +454,11 @@ function prepareDataSlots(
 
   // prepare intermediate outputs
   for (const invocation of invocations) {
+    const action = invocation.action;
+    if (action == null) {
+      throw new SubFunLogicError("action not found");
+    }
     for (const outputKey in invocation.outputSet) {
-      const action = plan.actions.get(invocation.actionID);
-      if (action == null) {
-        throw new SubFunLogicError("action not found");
-      }
-
       const output = invocation.outputSet[outputKey];
       const dataSlot = plan.dataSlots.get(output[handleIdKey]);
       if (dataSlot == null) {
