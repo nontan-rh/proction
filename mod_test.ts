@@ -30,15 +30,15 @@ Deno.test(function calc() {
   const BoxedNumber = typeSpec(boxedNumberPool);
 
   const add = action(
-    { l: BoxedNumber, r: BoxedNumber },
     { result: BoxedNumber },
-    ({ l, r }, { result }) => result.value = l.value + r.value,
+    { l: BoxedNumber, r: BoxedNumber },
+    ({ result }, { l, r }) => result.value = l.value + r.value,
   );
   const pureAdd = purify(add);
   const mul = action(
-    { l: BoxedNumber, r: BoxedNumber },
     { result: BoxedNumber },
-    ({ l, r }, { result }) => result.value = l.value * r.value,
+    { l: BoxedNumber, r: BoxedNumber },
+    ({ result }, { l, r }) => result.value = l.value * r.value,
   );
   const pureMul = purify(mul);
 
@@ -56,7 +56,7 @@ Deno.test(function calc() {
     const { result: result1 } = pureAdd({ l: input1, r: input2 });
     const { result: result2 } = pureAdd({ l: input3, r: input4 });
     const { result: result3 } = pureMul({ l: result1, r: result2 });
-    add({ l: result3, r: input5 }, { result });
+    add({ result }, { l: result3, r: input5 });
   }, { assertNoLeak: true });
 
   assertEquals(resultBody.value, 26);
@@ -91,18 +91,18 @@ Deno.test(async function twoOutputs(t) {
   }
 
   const divmod = action(
-    { l: BoxedNumber, r: BoxedNumber },
     { div: BoxedNumber, mod: BoxedNumber },
-    ({ l, r }, { div, mod }) => {
+    { l: BoxedNumber, r: BoxedNumber },
+    ({ div, mod }, { l, r }) => {
       div.value = Math.floor(l.value / r.value);
       mod.value = l.value % r.value;
     },
   );
   const pureDivmod = purify(divmod);
   const add = action(
-    { l: BoxedNumber, r: BoxedNumber },
     { result: BoxedNumber },
-    ({ l, r }, { result }) => result.value = l.value + r.value,
+    { l: BoxedNumber, r: BoxedNumber },
+    ({ result }, { l, r }) => result.value = l.value + r.value,
   );
 
   await t.step(function bothOutputsAreGlobal() {
@@ -116,7 +116,7 @@ Deno.test(async function twoOutputs(t) {
       const div = output(divBody);
       const mod = output(modBody);
 
-      divmod({ l: input1, r: input2 }, { div, mod });
+      divmod({ div, mod }, { l: input1, r: input2 });
     }, { assertNoLeak: true });
 
     assertEquals(divBody.value, 8);
@@ -135,7 +135,7 @@ Deno.test(async function twoOutputs(t) {
       const result = output(resultBody);
 
       const { mod } = pureDivmod({ l: input1, r: input2 });
-      add({ l: mod, r: input3 }, { result });
+      add({ result }, { l: mod, r: input3 });
     }, { assertNoLeak: true });
 
     assertEquals(resultBody.value, 102);
@@ -164,15 +164,15 @@ Deno.test(async function outputUsage(t) {
   }
 
   const add = action(
-    { l: BoxedNumber, r: BoxedNumber },
     { result: BoxedNumber },
-    ({ l, r }, { result }) => result.value = l.value + r.value,
+    { l: BoxedNumber, r: BoxedNumber },
+    ({ result }, { l, r }) => result.value = l.value + r.value,
   );
   const pureAdd = purify(add);
   const mul = action(
-    { l: BoxedNumber, r: BoxedNumber },
     { result: BoxedNumber },
-    ({ l, r }, { result }) => result.value = l.value * r.value,
+    { l: BoxedNumber, r: BoxedNumber },
+    ({ result }, { l, r }) => result.value = l.value * r.value,
   );
   const pureMul = purify(mul);
 
@@ -202,8 +202,8 @@ Deno.test(async function outputUsage(t) {
       const result2 = output(result2Body);
 
       const { result: sum } = pureAdd({ l: input1, r: input2 });
-      mul({ l: sum, r: input3 }, { result: result1 });
-      add({ l: sum, r: input4 }, { result: result2 });
+      mul({ result: result1 }, { l: sum, r: input3 });
+      add({ result: result2 }, { l: sum, r: input4 });
     }, { assertNoLeak: true });
 
     assertPostCondition();
@@ -223,8 +223,8 @@ Deno.test(async function outputUsage(t) {
       const sum = output(sumBody);
       const result = output(resultBody);
 
-      add({ l: input1, r: input2 }, { result: sum });
-      mul({ l: sum, r: input3 }, { result });
+      add({ result: sum }, { l: input1, r: input2 });
+      mul({ result }, { l: sum, r: input3 });
     }, { assertNoLeak: true });
 
     assertPostCondition();
@@ -251,15 +251,15 @@ Deno.test(function calcIO() {
   >(boxedNumberPool);
 
   const add = action(
-    { l: BoxedNumber, r: BoxedNumber },
     { result: BoxedNumber },
-    ({ l, r }, { result }) => result.setValue(l.getValue() + r.getValue()),
+    { l: BoxedNumber, r: BoxedNumber },
+    ({ result }, { l, r }) => result.setValue(l.getValue() + r.getValue()),
   );
   const pureAdd = purify(add);
   const mul = action(
-    { l: BoxedNumber, r: BoxedNumber },
     { result: BoxedNumber },
-    ({ l, r }, { result }) => result.setValue(l.getValue() * r.getValue()),
+    { l: BoxedNumber, r: BoxedNumber },
+    ({ result }, { l, r }) => result.setValue(l.getValue() * r.getValue()),
   );
   const pureMul = purify(mul);
 
@@ -283,8 +283,8 @@ Deno.test(function calcIO() {
     const result1Handle = output(result1W);
     const result2Handle = output(result2RW);
 
-    add({ l: result3, r: input5 }, { result: result1Handle });
-    mul({ l: result3, r: input5 }, { result: result2Handle });
+    add({ result: result1Handle }, { l: result3, r: input5 });
+    mul({ result: result2Handle }, { l: result3, r: input5 });
   }, { assertNoLeak: true });
 
   assertEquals(result1R.getValue(), 26);

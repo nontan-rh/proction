@@ -29,12 +29,6 @@ type Handle<T> = {
 };
 type UntypedHandle = Handle<unknown>;
 
-function isHandle(
-  x: UntypedHandle | (Record<ObjectKey, UntypedHandle>),
-): x is UntypedHandle {
-  return parentPlanKey in x;
-}
-
 export function getPlan(
   head:
     | UntypedHandle
@@ -44,6 +38,12 @@ export function getPlan(
     | (Record<ObjectKey, UntypedHandle>)
   )[]
 ): Plan {
+  function isHandle(
+    x: UntypedHandle | (Record<ObjectKey, UntypedHandle>),
+  ): x is UntypedHandle {
+    return parentPlanKey in x;
+  }
+
   let plan: Plan | undefined;
   if (isHandle(head)) {
     plan = head[parentPlanKey];
@@ -59,14 +59,16 @@ export function getPlan(
 
   for (const t of tail) {
     if (isHandle(t)) {
-      plan = t[parentPlanKey];
+      const p = t[parentPlanKey];
+      if (plan != null && p !== plan) {
+        throw new SubFunError("Plan inconsitent");
+      }
     } else {
       for (const k in t) {
         const p = t[k][parentPlanKey];
         if (plan != null && p !== plan) {
           throw new SubFunError("Plan inconsitent");
         }
-        plan = p;
       }
     }
   }
@@ -86,25 +88,25 @@ type HandleSet<T> = {
 };
 
 type Action<I extends ParamSpecSet, O extends ParamSpecSet> = {
-  f: (inputSet: InputSet<I>, outputSet: OutputSet<O>) => void;
+  f: (outputSet: OutputSet<O>, inputSet: InputSet<I>) => void;
   i: I;
   o: O;
 };
 type UntypedAction = {
-  f: (inputSet: unknown, outputSet: unknown) => void;
+  f: (outputSet: unknown, inputSet: unknown) => void;
   i: ParamSpecSet;
   o: ParamSpecSet;
 };
 
 const actionKey = Symbol("action");
 export function action<I extends ParamSpecSet, O extends ParamSpecSet>(
-  i: I,
   o: O,
-  f: (inputSet: InputSet<I>, outputSet: OutputSet<O>) => void,
+  i: I,
+  f: (outputSet: OutputSet<O>, inputSet: InputSet<I>) => void,
 ):
   & ((
-    inputSet: HandleSet<InputSet<I>>,
     outputSet: HandleSet<OutputSet<O>>,
+    inputSet: HandleSet<InputSet<I>>,
   ) => void)
   & { [actionKey]: Action<I, O> } {
   const action: Action<I, O> = {
@@ -114,10 +116,10 @@ export function action<I extends ParamSpecSet, O extends ParamSpecSet>(
   };
 
   const g = (
-    inputSet: HandleSet<InputSet<I>>,
     outputSet: HandleSet<OutputSet<O>>,
+    inputSet: HandleSet<InputSet<I>>,
   ) => {
-    const plan = getPlan(inputSet, outputSet);
+    const plan = getPlan(outputSet, inputSet);
 
     const id = plan.generateInvocationID();
     const invocation: Invocation = {
@@ -136,8 +138,8 @@ export function action<I extends ParamSpecSet, O extends ParamSpecSet>(
 export function purify<I extends ParamSpecSet, O extends ParamSpecSet>(
   rawAction:
     & ((
-      inputSet: HandleSet<InputSet<I>>,
       outputSet: HandleSet<OutputSet<O>>,
+      inputSet: HandleSet<InputSet<I>>,
     ) => void)
     & { [actionKey]: Action<I, O> },
 ): (inputSet: HandleSet<InputSet<I>>) => HandleSet<InputSet<O>> {
@@ -154,7 +156,7 @@ export function purify<I extends ParamSpecSet, O extends ParamSpecSet>(
     }
     const outputSet = partialOutputSet as HandleSet<OutputSet<O>>;
 
-    rawAction(inputSet, outputSet);
+    rawAction(outputSet, inputSet);
 
     return outputSet;
   };
@@ -312,7 +314,7 @@ function run(
         invocation.outputSet,
         cleanupList,
       );
-      action.f(restoredInputs, preparedOutputs);
+      action.f(preparedOutputs, restoredInputs);
       decRefSet(plan, invocation.inputSet);
       for (const cleanup of cleanupList) {
         cleanup();
