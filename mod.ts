@@ -105,8 +105,8 @@ export function action<I extends ParamSpecSet, O extends ParamSpecSet>(
   f: (outputSet: OutputSet<O>, inputSet: InputSet<I>) => void,
 ):
   & ((
-    outputSet: HandleSet<OutputSet<O>>,
-    inputSet: HandleSet<InputSet<I>>,
+    outputSet: { [key in keyof O]: Handle<OutputType<O[key]>> }, // expanded for readability of inferred type
+    inputSet: { [key in keyof I]: Handle<InputType<I[key]>> }, // expanded for readability of inferred type
   ) => void)
   & { [actionKey]: Action<I, O> } {
   const action: Action<I, O> = {
@@ -142,7 +142,10 @@ export function purify<I extends ParamSpecSet, O extends ParamSpecSet>(
       inputSet: HandleSet<InputSet<I>>,
     ) => void)
     & { [actionKey]: Action<I, O> },
-): (inputSet: HandleSet<InputSet<I>>) => HandleSet<InputSet<O>> {
+): (
+  inputSet: { [key in keyof I]: Handle<InputType<I[key]>> }, // expanded for readability of inferred type
+) => { [key in keyof O]: Handle<InputType<O[key]>> } // expanded for readability of inferred type
+{
   const action = rawAction[actionKey];
   return (inputSet: HandleSet<InputSet<I>>): HandleSet<InputSet<O>> => {
     const plan = getPlan(inputSet);
