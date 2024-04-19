@@ -183,14 +183,16 @@ export class Context {
 }
 
 type PlanFnParams = {
-  input<T>(value: T): Handle<T>;
-  output<T>(value: T): Handle<T>;
+  input<T extends object>(value: T): Handle<T>;
+  output<T extends object>(value: T): Handle<T>;
 };
 
 const undefinedFn = () => {};
 
 class Plan {
   state: PlanState;
+  inputCache: WeakMap<object, UntypedHandle>;
+  outputCache: WeakMap<object, UntypedHandle>;
 
   generateHandle: () => UntypedHandle = idGenerator((
     value,
@@ -206,6 +208,8 @@ class Plan {
 
   constructor() {
     this.state = "initial";
+    this.inputCache = new WeakMap();
+    this.outputCache = new WeakMap();
   }
 }
 
@@ -253,21 +257,47 @@ export function typeSpec<T extends I & O, I = T, O = T>(
   return { provider } as TypeSpec<T, I, O>;
 }
 
-function input<T>(plan: Plan, value: T): Handle<T> {
+function input<T extends object>(plan: Plan, value: T): Handle<T> {
+  const cached = plan.inputCache.get(value);
+  if (cached) {
+    return cached as Handle<T>;
+  }
+
+  // validation
+  if (plan.outputCache.has(value)) {
+    throw new SubFunError("the value is already specified as output");
+  }
+
   const handle = plan.generateHandle();
+
   plan.dataSlots.set(handle[handleIdKey], {
     type: "global-input",
     body: value,
   });
+  plan.inputCache.set(value, handle);
+
   return handle as Handle<T>;
 }
 
-function output<T>(plan: Plan, value: T): Handle<T> {
+function output<T extends object>(plan: Plan, value: T): Handle<T> {
+  const cached = plan.outputCache.get(value);
+  if (cached) {
+    return cached as Handle<T>;
+  }
+
+  // validation
+  if (plan.inputCache.has(value)) {
+    throw new SubFunError("the value is already specified as input");
+  }
+
   const handle = plan.generateHandle();
+
   plan.dataSlots.set(handle[handleIdKey], {
     type: "global-output",
     body: value,
   });
+  plan.outputCache.set(value, handle);
+
   return handle as Handle<T>;
 }
 

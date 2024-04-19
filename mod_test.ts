@@ -45,18 +45,17 @@ Deno.test(function calc() {
   const resultBody = new Box<number>();
 
   new Context().run(({ input, output }) => {
-    const input1 = input(Box.withValue(1));
-    const input2 = input(Box.withValue(2));
-    const input3 = input(Box.withValue(3));
-    const input4 = input(Box.withValue(4));
-    const input5 = input(Box.withValue(5));
-
     const result = output(resultBody);
-
-    const { result: result1 } = pureAdd({ l: input1, r: input2 });
-    const { result: result2 } = pureAdd({ l: input3, r: input4 });
+    const { result: result1 } = pureAdd({
+      l: input(Box.withValue(1)),
+      r: input(Box.withValue(2)),
+    });
+    const { result: result2 } = pureAdd({
+      l: input(Box.withValue(3)),
+      r: input(Box.withValue(4)),
+    });
     const { result: result3 } = pureMul({ l: result1, r: result2 });
-    add({ result }, { l: result3, r: input5 });
+    add({ result }, { l: result3, r: input(Box.withValue(5)) });
   }, { assertNoLeak: true });
 
   assertEquals(resultBody.value, 26);
@@ -110,13 +109,13 @@ Deno.test(async function twoOutputs(t) {
     const modBody = new Box<number>();
 
     new Context().run(({ input, output }) => {
-      const input1 = input(Box.withValue(42));
-      const input2 = input(Box.withValue(5));
-
       const div = output(divBody);
       const mod = output(modBody);
 
-      divmod({ div, mod }, { l: input1, r: input2 });
+      divmod({ div, mod }, {
+        l: input(Box.withValue(42)),
+        r: input(Box.withValue(5)),
+      });
     }, { assertNoLeak: true });
 
     assertEquals(divBody.value, 8);
@@ -128,14 +127,12 @@ Deno.test(async function twoOutputs(t) {
     const resultBody = new Box<number>();
 
     new Context().run(({ input, output }) => {
-      const input1 = input(Box.withValue(42));
-      const input2 = input(Box.withValue(5));
-      const input3 = input(Box.withValue(100));
-
       const result = output(resultBody);
-
-      const { mod } = pureDivmod({ l: input1, r: input2 });
-      add({ result }, { l: mod, r: input3 });
+      const { mod } = pureDivmod({
+        l: input(Box.withValue(42)),
+        r: input(Box.withValue(5)),
+      });
+      add({ result }, { l: mod, r: input(Box.withValue(100)) });
     }, { assertNoLeak: true });
 
     assertEquals(resultBody.value, 102);
@@ -193,17 +190,15 @@ Deno.test(async function outputUsage(t) {
     const result2Body = new Box<number>();
 
     new Context().run(({ input, output }) => {
-      const input1 = input(Box.withValue(42));
-      const input2 = input(Box.withValue(2));
-      const input3 = input(Box.withValue(3));
-      const input4 = input(Box.withValue(4));
-
       const result1 = output(result1Body);
       const result2 = output(result2Body);
 
-      const { result: sum } = pureAdd({ l: input1, r: input2 });
-      mul({ result: result1 }, { l: sum, r: input3 });
-      add({ result: result2 }, { l: sum, r: input4 });
+      const { result: sum } = pureAdd({
+        l: input(Box.withValue(42)),
+        r: input(Box.withValue(2)),
+      });
+      mul({ result: result1 }, { l: sum, r: input(Box.withValue(3)) });
+      add({ result: result2 }, { l: sum, r: input(Box.withValue(4)) });
     }, { assertNoLeak: true });
 
     assertPostCondition();
@@ -216,15 +211,14 @@ Deno.test(async function outputUsage(t) {
     const resultBody = new Box<number>();
 
     new Context().run(({ input, output }) => {
-      const input1 = input(Box.withValue(42));
-      const input2 = input(Box.withValue(2));
-      const input3 = input(Box.withValue(3));
-
       const sum = output(sumBody);
       const result = output(resultBody);
 
-      add({ result: sum }, { l: input1, r: input2 });
-      mul({ result }, { l: sum, r: input3 });
+      add({ result: sum }, {
+        l: input(Box.withValue(42)),
+        r: input(Box.withValue(2)),
+      });
+      mul({ result }, { l: sum, r: input(Box.withValue(3)) });
     }, { assertNoLeak: true });
 
     assertPostCondition();
@@ -270,19 +264,20 @@ Deno.test(function calcIO() {
   const [result1R, result1W] = pipeBox<number>();
   const result2RW = pipeBoxRW<number>();
   new Context().run(({ input, output }) => {
-    const input1 = input(input1R);
-    const input2 = input(input2RW);
-    const input3 = input(pipeBoxR(3));
-    const input4 = input(pipeBoxR(4));
-    const input5 = input(pipeBoxR(5));
-
-    const { result: result1 } = pureAdd({ l: input1, r: input2 });
-    const { result: result2 } = pureAdd({ l: input3, r: input4 });
-    const { result: result3 } = pureMul({ l: result1, r: result2 });
-
     const result1Handle = output(result1W);
     const result2Handle = output(result2RW);
 
+    const { result: result1 } = pureAdd({
+      l: input(input1R),
+      r: input(input2RW),
+    });
+    const { result: result2 } = pureAdd({
+      l: input(pipeBoxR(3)),
+      r: input(pipeBoxR(4)),
+    });
+    const { result: result3 } = pureMul({ l: result1, r: result2 });
+
+    const input5 = input(pipeBoxR(5));
     add({ result: result1Handle }, { l: result3, r: input5 });
     mul({ result: result2Handle }, { l: result3, r: input5 });
   }, { assertNoLeak: true });
