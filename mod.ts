@@ -2,6 +2,7 @@ import {
   SubFunAssertionError,
   SubFunError,
   SubFunLogicError,
+  unreachable,
 } from "./error.ts";
 import { Brand } from "./brand.ts";
 import { Provider } from "./provider.ts";
@@ -424,7 +425,7 @@ function prepareInvocations(
         case "stub-output":
           throw new SubFunLogicError(`unexpected data slot type: ${type}`);
         default:
-          throw new SubFunLogicError(`unknown data slot type: ${type}`);
+          return unreachable(type);
       }
     }
 
@@ -475,7 +476,7 @@ function prepareDataSlots(
           case "stub-output":
             throw new SubFunLogicError(`unexpected data slot type: ${type}`);
           default:
-            throw new SubFunLogicError(`unknown data slot type: ${type}`);
+            return unreachable(type);
         }
       } else {
         plan.dataSlots.set(input[handleIdKey], {
@@ -541,7 +542,7 @@ function restore<T>(plan: Plan, handle: Handle<T>): T {
     case "stub-output":
       throw new SubFunLogicError(`unexpected data slot type: ${type}`);
     default:
-      throw new SubFunLogicError(`unknown data slot type: ${type}`);
+      return unreachable(type);
   }
 }
 
@@ -571,7 +572,7 @@ function decRef<T>(plan: Plan, handle: Handle<T>): void {
     case "stub-output":
       throw new SubFunLogicError(`unexpected data slot type: ${type}`);
     default:
-      throw new SubFunLogicError(`unknown data slot type: ${type}`);
+      return unreachable(type);
   }
 }
 
@@ -630,7 +631,7 @@ function prepareOutput<T extends ParamSpecSet, K extends keyof T>(
       return body;
     }
     default:
-      throw new SubFunLogicError(`unknown data slot type: ${type}`);
+      return unreachable(type);
   }
 }
 
@@ -652,7 +653,7 @@ function assertNoLeak(plan: Plan) {
       case "stub-output":
         break;
       default:
-        throw new SubFunLogicError(`unknown data slot type: ${type}`);
+        return unreachable(type);
     }
   }
 }
