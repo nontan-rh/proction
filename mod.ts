@@ -99,6 +99,10 @@ type UntypedAction = {
 };
 
 const actionKey = Symbol("action");
+type ActionMeta<I extends ParamSpecSet, O extends ParamSpecSet> = {
+  [actionKey]: Action<I, O>;
+};
+
 export function action<I extends ParamSpecSet, O extends ParamSpecSet>(
   o: O,
   i: I,
@@ -108,7 +112,7 @@ export function action<I extends ParamSpecSet, O extends ParamSpecSet>(
     outputSet: { [key in keyof O]: Handle<OutputType<O[key]>> }, // expanded for readability of inferred type
     inputSet: { [key in keyof I]: Handle<InputType<I[key]>> }, // expanded for readability of inferred type
   ) => void)
-  & { [actionKey]: Action<I, O> } {
+  & ActionMeta<I, O> {
   const action: Action<I, O> = {
     f,
     i,
@@ -141,7 +145,7 @@ export function purify<I extends ParamSpecSet, O extends ParamSpecSet>(
       outputSet: HandleSet<OutputSet<O>>,
       inputSet: HandleSet<InputSet<I>>,
     ) => void)
-    & { [actionKey]: Action<I, O> },
+    & ActionMeta<I, O>,
 ): (
   inputSet: { [key in keyof I]: Handle<InputType<I[key]>> }, // expanded for readability of inferred type
 ) => { [key in keyof O]: Handle<InputType<O[key]>> } // expanded for readability of inferred type
