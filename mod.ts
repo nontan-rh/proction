@@ -88,27 +88,27 @@ type HandleSet<T> = {
   [key in keyof T]: Handle<T[key]>;
 };
 
-type Action<I extends object, O extends ParamSpecSet> = {
-  f: (outputSet: OutputSet<O>, inputSet: I) => void;
+type Action<I extends readonly unknown[], O extends ParamSpecSet> = {
+  f: (outputSet: OutputSet<O>, ...inputArgs: I) => void;
   o: O;
 };
 type UntypedAction = {
-  f: (outputSet: unknown, inputSet: unknown) => void;
+  f: (outputSet: unknown, ...inputArgs: readonly unknown[]) => void;
   o: ParamSpecSet;
 };
 
 const actionKey = Symbol("action");
-type ActionMeta<I extends object, O extends ParamSpecSet> = {
+type ActionMeta<I extends readonly unknown[], O extends ParamSpecSet> = {
   [actionKey]: Action<I, O>;
 };
 
-export function action<I extends object, O extends ParamSpecSet>(
+export function action<I extends readonly unknown[], O extends ParamSpecSet>(
   o: O,
-  f: (outputSet: OutputSet<O>, inputSet: I) => void,
+  f: (outputSet: OutputSet<O>, ...inputArgs: I) => void,
 ):
   & ((
     outputSet: { [key in keyof O]: Handle<OutputType<O[key]>> }, // expanded for readability of inferred type
-    inputSet: { [key in keyof I]: Handle<I[key]> }, // expanded for readability of inferred type
+    ...inputArgs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
   ) => void)
   & ActionMeta<I, O> {
   const action: Action<I, O> = {
@@ -118,15 +118,15 @@ export function action<I extends object, O extends ParamSpecSet>(
 
   const g = (
     outputSet: HandleSet<OutputSet<O>>,
-    inputSet: HandleSet<I>,
+    ...inputArgs: HandleSet<I>
   ) => {
-    const plan = getPlan(outputSet, inputSet);
+    const plan = getPlan(outputSet, ...inputArgs);
 
     const id = plan.generateInvocationID();
     const invocation: Invocation = {
       id,
-      action: action as UntypedAction,
-      inputSet,
+      action: action as unknown as UntypedAction, // FIXME: remove `as unknown`
+      inputArgs,
       outputSet,
     };
     plan.invocations.set(invocation.id, invocation);
@@ -136,20 +136,20 @@ export function action<I extends object, O extends ParamSpecSet>(
   return g;
 }
 
-export function purify<I extends object, O extends ParamSpecSet>(
+export function purify<I extends readonly unknown[], O extends ParamSpecSet>(
   rawAction:
     & ((
       outputSet: HandleSet<OutputSet<O>>,
-      inputSet: HandleSet<I>,
+      ...inputArgs: HandleSet<I>
     ) => void)
     & ActionMeta<I, O>,
 ): (
-  inputSet: { [key in keyof I]: Handle<I[key]> }, // expanded for readability of inferred type
+  ...inputArgs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => { [key in keyof O]: Handle<InputType<O[key]>> } // expanded for readability of inferred type
 {
   const action = rawAction[actionKey];
-  return (inputSet: HandleSet<I>): HandleSet<InputSet<O>> => {
-    const plan = getPlan(inputSet);
+  return (...inputArgs: HandleSet<I>): HandleSet<InputSet<O>> => {
+    const plan = getPlan(inputArgs[0], ...inputArgs); // FIXME: remove duplicated first arg ref
 
     const partialOutputSet: Partial<HandleSet<OutputSet<O>>> = {};
     for (const key in action.o) {
@@ -160,7 +160,7 @@ export function purify<I extends object, O extends ParamSpecSet>(
     }
     const outputSet = partialOutputSet as HandleSet<OutputSet<O>>;
 
-    rawAction(outputSet, inputSet);
+    rawAction(outputSet, ...inputArgs);
 
     return outputSet;
   };
@@ -170,7 +170,7 @@ type InvocationID = Brand<number, "invocationID">;
 type Invocation = {
   id: InvocationID;
   action: UntypedAction;
-  inputSet: Record<ObjectKey, UntypedHandle>;
+  inputArgs: readonly UntypedHandle[];
   outputSet: Record<ObjectKey, UntypedHandle>;
 };
 
@@ -337,14 +337,14 @@ function run(
         throw new SubFunLogicError("action not found");
       }
 
-      const restoredInputs = restoreSet(plan, invocation.inputSet);
+      const restoredInputs = restoreArgs(plan, invocation.inputArgs);
       const preparedOutputs = prepareOutputSet(
         plan,
         action.o,
         invocation.outputSet,
       );
-      action.f(preparedOutputs, restoredInputs);
-      decRefSet(plan, invocation.inputSet);
+      action.f(preparedOutputs, ...restoredInputs);
+      decRefArgs(plan, invocation.inputArgs);
       decRefSet(plan, invocation.outputSet);
     }
 
@@ -391,8 +391,8 @@ function prepareInvocations(
 
     visitedInvocations.set(invocationID, "temporary");
 
-    for (const inputKey in invocation.inputSet) {
-      visitHandle(invocation.inputSet[inputKey][handleIdKey]);
+    for (const inputArg of invocation.inputArgs) {
+      visitHandle(inputArg[handleIdKey]);
     }
 
     visitedInvocations.set(invocationID, "permanent");
@@ -444,9 +444,8 @@ function prepareDataSlots(
   for (const invocation of invocations) {
     // reserve intermediate inputs
     const action = invocation.action;
-    for (const inputKey in invocation.inputSet) {
-      const input = invocation.inputSet[inputKey];
-      const dataSlot = plan.dataSlots.get(input[handleIdKey]);
+    for (const inputArg of invocation.inputArgs) {
+      const dataSlot = plan.dataSlots.get(inputArg[handleIdKey]);
       if (dataSlot == null) {
         throw new SubFunLogicError(`dataSlot not found for handle: ${input}`);
       }
@@ -497,12 +496,15 @@ function prepareDataSlots(
   }
 }
 
-function restoreSet<T>(plan: Plan, handleSet: HandleSet<T>): T {
-  const partialRestored: Partial<T> = {};
-  for (const key in handleSet) {
-    partialRestored[key] = restore(plan, handleSet[key]);
+function restoreArgs(
+  plan: Plan,
+  argHandles: readonly UntypedHandle[],
+): unknown[] {
+  const restored: unknown[] = [];
+  for (const argHandle of argHandles) {
+    restored.push(restore(plan, argHandle));
   }
-  return partialRestored as T;
+  return restored;
 }
 
 function restore<T>(plan: Plan, handle: Handle<T>): T {
@@ -530,6 +532,12 @@ function restore<T>(plan: Plan, handle: Handle<T>): T {
     }
     default:
       return unreachable(type);
+  }
+}
+
+function decRefArgs(plan: Plan, handleSet: readonly UntypedHandle[]): void {
+  for (const handle of handleSet) {
+    decRef(plan, handle);
   }
 }
 
