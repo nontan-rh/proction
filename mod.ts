@@ -220,12 +220,12 @@ class Plan {
 type PlanState = "initial" | "planning" | "running" | "done" | "error";
 
 type DataSlot =
-  | GlobalInputSlot
+  | SourceSlot
   | IntermediateSlot
-  | GlobalOutputSlot;
-type GlobalInputSlot = { type: "global-input"; body: unknown };
+  | SinkSlot;
+type SourceSlot = { type: "source"; body: unknown };
 type IntermediateSlot = { type: "intermediate"; body: Rc<Box<unknown>> };
-type GlobalOutputSlot = { type: "global-output"; body: unknown };
+type SinkSlot = { type: "sink"; body: unknown };
 
 export type ParamSpecSet = {
   [key: ObjectKey]: TypeSpec<unknown, unknown, unknown>;
@@ -273,7 +273,7 @@ function input<T extends object>(plan: Plan, value: T): Handle<T> {
   const handle = plan.generateHandle();
 
   plan.dataSlots.set(handle[handleIdKey], {
-    type: "global-input",
+    type: "source",
     body: value,
   });
   plan.inputCache.set(value, handle);
@@ -295,7 +295,7 @@ function output<T extends object>(plan: Plan, value: T): Handle<T> {
   const handle = plan.generateHandle();
 
   plan.dataSlots.set(handle[handleIdKey], {
-    type: "global-output",
+    type: "sink",
     body: value,
   });
   plan.outputCache.set(value, handle);
@@ -405,11 +405,11 @@ function prepareInvocations(
     if (dataSlot != null) {
       const type = dataSlot.type;
       switch (type) {
-        case "global-input":
+        case "source":
           return;
         case "intermediate":
           throw new SubFunLogicError(`unexpected data slot type: ${type}`);
-        case "global-output":
+        case "sink":
           break;
         default:
           return unreachable(type);
@@ -428,7 +428,7 @@ function prepareInvocations(
 
   for (const handleId of plan.dataSlots.keys()) {
     const dataSlot = plan.dataSlots.get(handleId);
-    if (dataSlot == null || dataSlot.type !== "global-output") {
+    if (dataSlot == null || dataSlot.type !== "sink") {
       continue;
     }
     visitHandle(handleId);
@@ -453,12 +453,12 @@ function prepareDataSlots(
 
       const type = dataSlot.type;
       switch (type) {
-        case "global-input":
+        case "source":
           break;
         case "intermediate":
           dataSlot.body.incRef();
           break;
-        case "global-output":
+        case "sink":
           break;
         default:
           return unreachable(type);
@@ -483,11 +483,11 @@ function prepareDataSlots(
       } else {
         const type = dataSlot.type;
         switch (type) {
-          case "global-input":
+          case "source":
             throw new SubFunLogicError(`unexpected data slot type: ${type}`);
           case "intermediate":
             throw new SubFunLogicError(`unexpected data slot type: ${type}`);
-          case "global-output":
+          case "sink":
             break;
           default:
             return unreachable(type);
@@ -515,7 +515,7 @@ function restore<T>(plan: Plan, handle: Handle<T>): T {
 
   const type = dataSlot.type;
   switch (type) {
-    case "global-input": {
+    case "source": {
       const body = dataSlot.body;
       return body as T;
     }
@@ -524,7 +524,7 @@ function restore<T>(plan: Plan, handle: Handle<T>): T {
         throw new SubFunLogicError("data slot is not set yet");
       }
       return dataSlot.body.body.value as T;
-    case "global-output": {
+    case "sink": {
       const body = dataSlot.body;
       return body as T;
     }
@@ -549,12 +549,12 @@ function decRef<T>(plan: Plan, handle: Handle<T>): void {
 
   const type = dataSlot.type;
   switch (type) {
-    case "global-input":
+    case "source":
       break;
     case "intermediate":
       dataSlot.body.decRef();
       break;
-    case "global-output":
+    case "sink":
       break;
     default:
       return unreachable(type);
@@ -592,7 +592,7 @@ function prepareOutput<T extends ParamSpecSet, K extends keyof T>(
 
   const type = dataSlot.type;
   switch (type) {
-    case "global-input":
+    case "source":
       throw new SubFunLogicError(`unexpected data slot type: ${type}`);
     case "intermediate": {
       if (dataSlot.body.body.isSet) {
@@ -602,7 +602,7 @@ function prepareOutput<T extends ParamSpecSet, K extends keyof T>(
       dataSlot.body.body.value = body;
       return body;
     }
-    case "global-output": {
+    case "sink": {
       const body = dataSlot.body;
       return body as T[K];
     }
@@ -615,7 +615,7 @@ function assertNoLeak(plan: Plan) {
   for (const dataSlot of plan.dataSlots.values()) {
     const type = dataSlot.type;
     switch (type) {
-      case "global-input":
+      case "source":
         break;
       case "intermediate":
         if (!dataSlot.body.isFreed) {
@@ -624,7 +624,7 @@ function assertNoLeak(plan: Plan) {
           );
         }
         break;
-      case "global-output":
+      case "sink":
         break;
       default:
         return unreachable(type);
