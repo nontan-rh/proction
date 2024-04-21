@@ -88,41 +88,37 @@ type HandleSet<T> = {
   [key in keyof T]: Handle<T[key]>;
 };
 
-type Action<I extends ParamSpecSet, O extends ParamSpecSet> = {
-  f: (outputSet: OutputSet<O>, inputSet: InputSet<I>) => void;
-  i: I;
+type Action<I extends object, O extends ParamSpecSet> = {
+  f: (outputSet: OutputSet<O>, inputSet: I) => void;
   o: O;
 };
 type UntypedAction = {
   f: (outputSet: unknown, inputSet: unknown) => void;
-  i: ParamSpecSet;
   o: ParamSpecSet;
 };
 
 const actionKey = Symbol("action");
-type ActionMeta<I extends ParamSpecSet, O extends ParamSpecSet> = {
+type ActionMeta<I extends object, O extends ParamSpecSet> = {
   [actionKey]: Action<I, O>;
 };
 
-export function action<I extends ParamSpecSet, O extends ParamSpecSet>(
+export function action<I extends object, O extends ParamSpecSet>(
   o: O,
-  i: I,
-  f: (outputSet: OutputSet<O>, inputSet: InputSet<I>) => void,
+  f: (outputSet: OutputSet<O>, inputSet: I) => void,
 ):
   & ((
     outputSet: { [key in keyof O]: Handle<OutputType<O[key]>> }, // expanded for readability of inferred type
-    inputSet: { [key in keyof I]: Handle<InputType<I[key]>> }, // expanded for readability of inferred type
+    inputSet: { [key in keyof I]: Handle<I[key]> }, // expanded for readability of inferred type
   ) => void)
   & ActionMeta<I, O> {
   const action: Action<I, O> = {
     f,
-    i,
     o,
   };
 
   const g = (
     outputSet: HandleSet<OutputSet<O>>,
-    inputSet: HandleSet<InputSet<I>>,
+    inputSet: HandleSet<I>,
   ) => {
     const plan = getPlan(outputSet, inputSet);
 
@@ -140,19 +136,19 @@ export function action<I extends ParamSpecSet, O extends ParamSpecSet>(
   return g;
 }
 
-export function purify<I extends ParamSpecSet, O extends ParamSpecSet>(
+export function purify<I extends object, O extends ParamSpecSet>(
   rawAction:
     & ((
       outputSet: HandleSet<OutputSet<O>>,
-      inputSet: HandleSet<InputSet<I>>,
+      inputSet: HandleSet<I>,
     ) => void)
     & ActionMeta<I, O>,
 ): (
-  inputSet: { [key in keyof I]: Handle<InputType<I[key]>> }, // expanded for readability of inferred type
+  inputSet: { [key in keyof I]: Handle<I[key]> }, // expanded for readability of inferred type
 ) => { [key in keyof O]: Handle<InputType<O[key]>> } // expanded for readability of inferred type
 {
   const action = rawAction[actionKey];
-  return (inputSet: HandleSet<InputSet<I>>): HandleSet<InputSet<O>> => {
+  return (inputSet: HandleSet<I>): HandleSet<InputSet<O>> => {
     const plan = getPlan(inputSet);
 
     const partialOutputSet: Partial<HandleSet<OutputSet<O>>> = {};
@@ -226,12 +222,10 @@ type PlanState = "initial" | "planning" | "running" | "done" | "error";
 type DataSlot =
   | GlobalInputSlot
   | IntermediateSlot
-  | GlobalOutputSlot
-  | StubOutputSlot;
+  | GlobalOutputSlot;
 type GlobalInputSlot = { type: "global-input"; body: unknown };
 type IntermediateSlot = { type: "intermediate"; body: Rc<Box<unknown>> };
 type GlobalOutputSlot = { type: "global-output"; body: unknown };
-type StubOutputSlot = { type: "stub-output" };
 
 export type ParamSpecSet = {
   [key: ObjectKey]: TypeSpec<unknown, unknown, unknown>;
@@ -337,26 +331,21 @@ function run(
 
     plan.state = "running";
 
-    for (let i = invocations.length - 1; i >= 0; i--) {
-      const invocation = invocations[i];
+    for (const invocation of invocations) {
       const action = invocation.action;
       if (action == null) {
         throw new SubFunLogicError("action not found");
       }
 
       const restoredInputs = restoreSet(plan, invocation.inputSet);
-      const cleanupList: (() => void)[] = [];
       const preparedOutputs = prepareOutputSet(
         plan,
         action.o,
         invocation.outputSet,
-        cleanupList,
       );
       action.f(preparedOutputs, restoredInputs);
       decRefSet(plan, invocation.inputSet);
-      for (const cleanup of cleanupList) {
-        cleanup();
-      }
+      decRefSet(plan, invocation.outputSet);
     }
 
     if (fixedOptions.assertNoLeak) {
@@ -422,8 +411,6 @@ function prepareInvocations(
           throw new SubFunLogicError(`unexpected data slot type: ${type}`);
         case "global-output":
           break;
-        case "stub-output":
-          throw new SubFunLogicError(`unexpected data slot type: ${type}`);
         default:
           return unreachable(type);
       }
@@ -447,62 +434,64 @@ function prepareInvocations(
     visitHandle(handleId);
   }
 
-  return result;
+  return result.reverse();
 }
 
 function prepareDataSlots(
   plan: Plan,
   invocations: Invocation[],
 ): void {
-  // prepare intermediate inputs
   for (const invocation of invocations) {
+    // reserve intermediate inputs
     const action = invocation.action;
-    if (action == null) {
-      throw new SubFunLogicError("action not found");
-    }
     for (const inputKey in invocation.inputSet) {
       const input = invocation.inputSet[inputKey];
       const dataSlot = plan.dataSlots.get(input[handleIdKey]);
-      if (dataSlot != null) {
-        const type = dataSlot.type;
-        switch (type) {
-          case "global-input":
-            break;
-          case "intermediate":
-            dataSlot.body.incRef();
-            break;
-          case "global-output":
-            break;
-          case "stub-output":
-            throw new SubFunLogicError(`unexpected data slot type: ${type}`);
-          default:
-            return unreachable(type);
-        }
-      } else {
-        plan.dataSlots.set(input[handleIdKey], {
+      if (dataSlot == null) {
+        throw new SubFunLogicError(`dataSlot not found for handle: ${input}`);
+      }
+
+      const type = dataSlot.type;
+      switch (type) {
+        case "global-input":
+          break;
+        case "intermediate":
+          dataSlot.body.incRef();
+          break;
+        case "global-output":
+          break;
+        default:
+          return unreachable(type);
+      }
+    }
+
+    // create intermediate outputs if needed
+    for (const outputKey in invocation.outputSet) {
+      const output = invocation.outputSet[outputKey];
+      const dataSlot = plan.dataSlots.get(output[handleIdKey]);
+
+      if (dataSlot == null) {
+        plan.dataSlots.set(output[handleIdKey], {
           type: "intermediate",
           body: new Rc(new Box(), (x) => {
             if (!x.isSet) {
               return;
             }
-            action.i[inputKey].provider.release(x.value);
+            action.o[outputKey].provider.release(x.value);
           }, console.error),
         });
-      }
-    }
-  }
-
-  // prepare intermediate outputs
-  for (const invocation of invocations) {
-    const action = invocation.action;
-    if (action == null) {
-      throw new SubFunLogicError("action not found");
-    }
-    for (const outputKey in invocation.outputSet) {
-      const output = invocation.outputSet[outputKey];
-      const dataSlot = plan.dataSlots.get(output[handleIdKey]);
-      if (dataSlot == null) {
-        plan.dataSlots.set(output[handleIdKey], { type: "stub-output" });
+      } else {
+        const type = dataSlot.type;
+        switch (type) {
+          case "global-input":
+            throw new SubFunLogicError(`unexpected data slot type: ${type}`);
+          case "intermediate":
+            throw new SubFunLogicError(`unexpected data slot type: ${type}`);
+          case "global-output":
+            break;
+          default:
+            return unreachable(type);
+        }
       }
     }
   }
@@ -539,8 +528,6 @@ function restore<T>(plan: Plan, handle: Handle<T>): T {
       const body = dataSlot.body;
       return body as T;
     }
-    case "stub-output":
-      throw new SubFunLogicError(`unexpected data slot type: ${type}`);
     default:
       return unreachable(type);
   }
@@ -569,8 +556,6 @@ function decRef<T>(plan: Plan, handle: Handle<T>): void {
       break;
     case "global-output":
       break;
-    case "stub-output":
-      throw new SubFunLogicError(`unexpected data slot type: ${type}`);
     default:
       return unreachable(type);
   }
@@ -580,7 +565,6 @@ function prepareOutputSet<T extends ParamSpecSet>(
   plan: Plan,
   paramSpecSet: T,
   handleSet: HandleSet<OutputSet<T>>,
-  cleanupList: (() => void)[],
 ): OutputSet<T> {
   const partialPrepared: Partial<OutputSet<T>> = {};
   for (const key in handleSet) {
@@ -589,7 +573,6 @@ function prepareOutputSet<T extends ParamSpecSet>(
       paramSpecSet,
       handleSet,
       key,
-      cleanupList,
     );
   }
   return partialPrepared as OutputSet<T>;
@@ -600,7 +583,6 @@ function prepareOutput<T extends ParamSpecSet, K extends keyof T>(
   paramSpecSet: T,
   handleSet: HandleSet<OutputSet<T>>,
   key: K,
-  cleanupList: (() => void)[],
 ): OutputType<T[K]> {
   const handle = handleSet[key];
   const dataSlot = plan.dataSlots.get(handle[handleIdKey]);
@@ -624,12 +606,6 @@ function prepareOutput<T extends ParamSpecSet, K extends keyof T>(
       const body = dataSlot.body;
       return body as T[K];
     }
-    case "stub-output": {
-      const provider = paramSpecSet[key].provider;
-      const body = provider.acquire();
-      cleanupList.push(() => provider.release(body));
-      return body;
-    }
     default:
       return unreachable(type);
   }
@@ -649,8 +625,6 @@ function assertNoLeak(plan: Plan) {
         }
         break;
       case "global-output":
-        break;
-      case "stub-output":
         break;
       default:
         return unreachable(type);

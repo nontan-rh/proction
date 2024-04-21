@@ -31,14 +31,16 @@ Deno.test(function calc() {
 
   const add = action(
     { result: BoxedNumber },
-    { l: BoxedNumber, r: BoxedNumber },
-    ({ result }, { l, r }) => result.value = l.value + r.value,
+    (
+      { result },
+      { l, r }: { l: Box<number>; r: Box<number> },
+    ) => result.value = l.value + r.value,
   );
   const pureAdd = purify(add);
   const mul = action(
     { result: BoxedNumber },
-    { l: BoxedNumber, r: BoxedNumber },
-    ({ result }, { l, r }) => result.value = l.value * r.value,
+    ({ result }, { l, r }: { l: Box<number>; r: Box<number> }) =>
+      result.value = l.value * r.value,
   );
   const pureMul = purify(mul);
 
@@ -91,8 +93,7 @@ Deno.test(async function twoOutputs(t) {
 
   const divmod = action(
     { div: BoxedNumber, mod: BoxedNumber },
-    { l: BoxedNumber, r: BoxedNumber },
-    ({ div, mod }, { l, r }) => {
+    ({ div, mod }, { l, r }: { l: Box<number>; r: Box<number> }) => {
       div.value = Math.floor(l.value / r.value);
       mod.value = l.value % r.value;
     },
@@ -100,8 +101,8 @@ Deno.test(async function twoOutputs(t) {
   const pureDivmod = purify(divmod);
   const add = action(
     { result: BoxedNumber },
-    { l: BoxedNumber, r: BoxedNumber },
-    ({ result }, { l, r }) => result.value = l.value + r.value,
+    ({ result }, { l, r }: { l: Box<number>; r: Box<number> }) =>
+      result.value = l.value + r.value,
   );
 
   await t.step(function bothOutputsAreGlobal() {
@@ -162,14 +163,14 @@ Deno.test(async function outputUsage(t) {
 
   const add = action(
     { result: BoxedNumber },
-    { l: BoxedNumber, r: BoxedNumber },
-    ({ result }, { l, r }) => result.value = l.value + r.value,
+    ({ result }, { l, r }: { l: Box<number>; r: Box<number> }) =>
+      result.value = l.value + r.value,
   );
   const pureAdd = purify(add);
   const mul = action(
     { result: BoxedNumber },
-    { l: BoxedNumber, r: BoxedNumber },
-    ({ result }, { l, r }) => result.value = l.value * r.value,
+    ({ result }, { l, r }: { l: Box<number>; r: Box<number> }) =>
+      result.value = l.value * r.value,
   );
   const pureMul = purify(mul);
 
@@ -246,14 +247,14 @@ Deno.test(function calcIO() {
 
   const add = action(
     { result: BoxedNumber },
-    { l: BoxedNumber, r: BoxedNumber },
-    ({ result }, { l, r }) => result.setValue(l.getValue() + r.getValue()),
+    ({ result }, { l, r }: { l: IPipeBoxR<number>; r: IPipeBoxR<number> }) =>
+      result.setValue(l.getValue() + r.getValue()),
   );
   const pureAdd = purify(add);
   const mul = action(
     { result: BoxedNumber },
-    { l: BoxedNumber, r: BoxedNumber },
-    ({ result }, { l, r }) => result.setValue(l.getValue() * r.getValue()),
+    ({ result }, { l, r }: { l: IPipeBoxR<number>; r: IPipeBoxR<number> }) =>
+      result.setValue(l.getValue() * r.getValue()),
   );
   const pureMul = purify(mul);
 
