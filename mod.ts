@@ -78,21 +78,91 @@ type HandleSet<T> = {
   [key in keyof T]: Handle<T[key]>;
 };
 
-type Action<I extends readonly unknown[], O extends ParamSpecSet> = {
+const outputModeSingle = "single" as const;
+const outputModeNamed = "named" as const;
+
+type SingleOutputAction<
+  I extends readonly unknown[],
+  O extends TypeSpec<unknown, unknown, unknown>,
+> = {
+  outputMode: typeof outputModeSingle;
+  f: (output: OutputType<O>, ...inputArgs: I) => void;
+  o: O;
+};
+type NamedOutputAction<I extends readonly unknown[], O extends ParamSpecSet> = {
+  outputMode: typeof outputModeNamed;
   f: (outputSet: OutputSet<O>, ...inputArgs: I) => void;
   o: O;
 };
-type UntypedAction = {
+type SingleOutputUntypedAction = {
+  outputMode: typeof outputModeSingle;
+  f: (output: unknown, ...inputArgs: readonly unknown[]) => void;
+  o: TypeSpec<unknown, unknown, unknown>;
+};
+type NamedOutputUntypedAction = {
+  outputMode: typeof outputModeNamed;
   f: (outputSet: unknown, ...inputArgs: readonly unknown[]) => void;
   o: ParamSpecSet;
 };
+type UntypedAction = SingleOutputUntypedAction | NamedOutputUntypedAction;
 
 const actionKey = Symbol("action");
-type ActionMeta<I extends readonly unknown[], O extends ParamSpecSet> = {
-  [actionKey]: Action<I, O>;
+type SingleOutputActionMeta<
+  I extends readonly unknown[],
+  O extends TypeSpec<unknown, unknown, unknown>,
+> = {
+  [actionKey]: SingleOutputAction<I, O>;
+};
+type NamedOutputActionMeta<
+  I extends readonly unknown[],
+  O extends ParamSpecSet,
+> = {
+  [actionKey]: NamedOutputAction<I, O>;
 };
 
-export function action<I extends readonly unknown[], O extends ParamSpecSet>(
+export function singleOutputAction<
+  I extends readonly unknown[],
+  O extends TypeSpec<unknown, unknown, unknown>,
+>(
+  o: O,
+  f: (output: OutputType<O>, ...inputArgs: I) => void,
+):
+  & ((
+    output: Handle<OutputType<O>>, // expanded for readability of inferred type
+    ...inputArgs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
+  ) => void)
+  & SingleOutputActionMeta<I, O> {
+  const action: SingleOutputAction<I, O> = {
+    outputMode: outputModeSingle,
+    f,
+    o,
+  };
+
+  const g = (
+    output: Handle<OutputType<O>>,
+    ...inputArgs: HandleSet<I>
+  ) => {
+    const plan = getPlan(output, ...inputArgs);
+
+    const id = plan.generateInvocationID();
+    const invocation: Invocation = {
+      id,
+      outputMode: outputModeSingle,
+      action: action as unknown as UntypedAction, // FIXME: remove `as unknown`
+      inputArgs,
+      output,
+    };
+    plan.invocations.set(invocation.id, invocation);
+  };
+  g[actionKey] = action;
+
+  return g;
+}
+
+export function namedOutputAction<
+  I extends readonly unknown[],
+  O extends ParamSpecSet,
+>(
   o: O,
   f: (outputSet: OutputSet<O>, ...inputArgs: I) => void,
 ):
@@ -100,8 +170,9 @@ export function action<I extends readonly unknown[], O extends ParamSpecSet>(
     outputSet: { [key in keyof O]: Handle<OutputType<O[key]>> }, // expanded for readability of inferred type
     ...inputArgs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
   ) => void)
-  & ActionMeta<I, O> {
-  const action: Action<I, O> = {
+  & NamedOutputActionMeta<I, O> {
+  const action: NamedOutputAction<I, O> = {
+    outputMode: outputModeNamed,
     f,
     o,
   };
@@ -115,6 +186,7 @@ export function action<I extends readonly unknown[], O extends ParamSpecSet>(
     const id = plan.generateInvocationID();
     const invocation: Invocation = {
       id,
+      outputMode: outputModeNamed,
       action: action as unknown as UntypedAction, // FIXME: remove `as unknown`
       inputArgs,
       outputSet,
@@ -126,13 +198,38 @@ export function action<I extends readonly unknown[], O extends ParamSpecSet>(
   return g;
 }
 
-export function purify<I extends readonly unknown[], O extends ParamSpecSet>(
+export function singleOutputPurify<
+  I extends readonly unknown[],
+  O extends TypeSpec<unknown, unknown, unknown>,
+>(
+  rawAction:
+    & ((
+      output: Handle<OutputType<O>>,
+      ...inputArgs: HandleSet<I>
+    ) => void)
+    & SingleOutputActionMeta<I, O>,
+): (
+  ...inputArgs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
+) => Handle<InputType<O>> // expanded for readability of inferred type
+{
+  return (...inputArgs: HandleSet<I>): Handle<InputType<O>> => {
+    const plan = getPlan(...inputArgs);
+    const output = plan.generateHandle() as Handle<OutputType<O>>;
+    rawAction(output, ...inputArgs);
+    return output;
+  };
+}
+
+export function namedOutputPurify<
+  I extends readonly unknown[],
+  O extends ParamSpecSet,
+>(
   rawAction:
     & ((
       outputSet: HandleSet<OutputSet<O>>,
       ...inputArgs: HandleSet<I>
     ) => void)
-    & ActionMeta<I, O>,
+    & NamedOutputActionMeta<I, O>,
 ): (
   ...inputArgs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => { [key in keyof O]: Handle<InputType<O[key]>> } // expanded for readability of inferred type
@@ -157,8 +254,17 @@ export function purify<I extends readonly unknown[], O extends ParamSpecSet>(
 }
 
 type InvocationID = Brand<number, "invocationID">;
-type Invocation = {
+type Invocation = SingleOutputInvocation | NamedOutputInvocation;
+type SingleOutputInvocation = {
   id: InvocationID;
+  outputMode: typeof outputModeSingle;
+  action: UntypedAction;
+  inputArgs: readonly UntypedHandle[];
+  output: UntypedHandle;
+};
+type NamedOutputInvocation = {
+  id: InvocationID;
+  outputMode: typeof outputModeNamed;
   action: UntypedAction;
   inputArgs: readonly UntypedHandle[];
   outputSet: Record<ObjectKey, UntypedHandle>;
@@ -327,15 +433,41 @@ function run(
         throw new SubFunLogicError("action not found");
       }
 
-      const restoredInputs = restoreArgs(plan, invocation.inputArgs);
-      const preparedOutputs = prepareOutputSet(
-        plan,
-        action.o,
-        invocation.outputSet,
-      );
-      action.f(preparedOutputs, ...restoredInputs);
-      decRefArgs(plan, invocation.inputArgs);
-      decRefSet(plan, invocation.outputSet);
+      const outputMode = action.outputMode;
+      switch (outputMode) {
+        case "single": {
+          if (invocation.outputMode !== outputModeSingle) {
+            throw new SubFunLogicError("output mode mismatch");
+          }
+          const restoredInputs = restoreArgs(plan, invocation.inputArgs);
+          const preparedOutputs = prepareOutput(
+            plan,
+            action.o,
+            invocation.output,
+          );
+          action.f(preparedOutputs, ...restoredInputs);
+          decRefArray(plan, invocation.inputArgs);
+          decRef(plan, invocation.output);
+          break;
+        }
+        case "named": {
+          if (invocation.outputMode !== outputModeNamed) {
+            throw new SubFunLogicError("output mode mismatch");
+          }
+          const restoredInputs = restoreArgs(plan, invocation.inputArgs);
+          const preparedOutputs = prepareNamedOutput(
+            plan,
+            action.o,
+            invocation.outputSet,
+          );
+          action.f(preparedOutputs, ...restoredInputs);
+          decRefArray(plan, invocation.inputArgs);
+          decRefSet(plan, invocation.outputSet);
+          break;
+        }
+        default:
+          return unreachable(outputMode);
+      }
     }
 
     if (fixedOptions.assertNoLeak) {
@@ -359,12 +491,29 @@ function prepareInvocations(
 
   const outputToInvocation = new Map<HandleId, Invocation>();
   for (const invocation of plan.invocations.values()) {
-    for (const outputKey in invocation.outputSet) {
-      const output = invocation.outputSet[outputKey];
-      if (outputToInvocation.has(output[handleIdKey])) {
-        throw new SubFunLogicError("the output have two parent invocations");
+    const outputMode = invocation.outputMode;
+    switch (outputMode) {
+      case "single": {
+        const output = invocation.output;
+        if (outputToInvocation.has(output[handleIdKey])) {
+          throw new SubFunLogicError("the output have two parent invocations");
+        }
+        outputToInvocation.set(output[handleIdKey], invocation);
+        break;
       }
-      outputToInvocation.set(output[handleIdKey], invocation);
+      case "named":
+        for (const outputKey in invocation.outputSet) {
+          const output = invocation.outputSet[outputKey];
+          if (outputToInvocation.has(output[handleIdKey])) {
+            throw new SubFunLogicError(
+              "the output have two parent invocations",
+            );
+          }
+          outputToInvocation.set(output[handleIdKey], invocation);
+        }
+        break;
+      default:
+        unreachable(outputMode);
     }
   }
 
@@ -455,34 +604,71 @@ function prepareDataSlots(
     }
 
     // create intermediate outputs if needed
-    for (const outputKey in invocation.outputSet) {
-      const output = invocation.outputSet[outputKey];
-      const dataSlot = plan.dataSlots.get(output[handleIdKey]);
-
-      if (dataSlot == null) {
-        plan.dataSlots.set(output[handleIdKey], {
-          type: "intermediate",
-          body: new Rc(new Box(), (x) => {
-            if (!x.isSet) {
-              return;
-            }
-            action.o[outputKey].provider.release(x.value);
-          }, console.error),
-        });
-      } else {
-        const type = dataSlot.type;
-        switch (type) {
-          case "source":
-            throw new SubFunLogicError(`unexpected data slot type: ${type}`);
-          case "intermediate":
-            throw new SubFunLogicError(`unexpected data slot type: ${type}`);
-          case "sink":
-            break;
-          default:
-            return unreachable(type);
+    const outputMode = action.outputMode;
+    switch (outputMode) {
+      case "single": {
+        if (invocation.outputMode !== outputModeSingle) {
+          throw new SubFunLogicError("output mode mismatch");
         }
+        prepareIntermediateOutput(plan, action.o, invocation.output);
+        break;
       }
+      case "named": {
+        if (invocation.outputMode !== outputModeNamed) {
+          throw new SubFunLogicError("output mode mismatch");
+        }
+        prepareNamedIntermediateOutput(plan, action.o, invocation.outputSet);
+        break;
+      }
+      default:
+        return unreachable(outputMode);
     }
+  }
+}
+
+function prepareIntermediateOutput(
+  plan: Plan,
+  typeSpec: TypeSpec<unknown, unknown, unknown>,
+  output: UntypedHandle,
+) {
+  const dataSlot = plan.dataSlots.get(output[handleIdKey]);
+
+  if (dataSlot == null) {
+    plan.dataSlots.set(output[handleIdKey], {
+      type: "intermediate",
+      body: new Rc(new Box(), (x) => {
+        if (!x.isSet) {
+          return;
+        }
+        typeSpec.provider.release(x.value);
+      }, console.error),
+    });
+  } else {
+    const type = dataSlot.type;
+    switch (type) {
+      case "source":
+        throw new SubFunLogicError(`unexpected data slot type: ${type}`);
+      case "intermediate":
+        throw new SubFunLogicError(`unexpected data slot type: ${type}`);
+      case "sink":
+        break;
+      default:
+        return unreachable(type);
+    }
+  }
+}
+
+function prepareNamedIntermediateOutput<T extends ParamSpecSet>(
+  plan: Plan,
+  paramSpecSet: T,
+  handleSet: HandleSet<OutputSet<T>>,
+) {
+  for (const outputKey in handleSet) {
+    prepareIntermediateOutput(
+      plan,
+      paramSpecSet[outputKey],
+      handleSet[outputKey],
+    );
   }
 }
 
@@ -525,7 +711,7 @@ function restore<T>(plan: Plan, handle: Handle<T>): T {
   }
 }
 
-function decRefArgs(plan: Plan, handleSet: readonly UntypedHandle[]): void {
+function decRefArray(plan: Plan, handleSet: readonly UntypedHandle[]): void {
   for (const handle of handleSet) {
     decRef(plan, handle);
   }
@@ -559,30 +745,11 @@ function decRef<T>(plan: Plan, handle: Handle<T>): void {
   }
 }
 
-function prepareOutputSet<T extends ParamSpecSet>(
+function prepareOutput<T extends TypeSpec<unknown, unknown, unknown>>(
   plan: Plan,
-  paramSpecSet: T,
-  handleSet: HandleSet<OutputSet<T>>,
-): OutputSet<T> {
-  const partialPrepared: Partial<OutputSet<T>> = {};
-  for (const key in handleSet) {
-    partialPrepared[key] = prepareOutput(
-      plan,
-      paramSpecSet,
-      handleSet,
-      key,
-    );
-  }
-  return partialPrepared as OutputSet<T>;
-}
-
-function prepareOutput<T extends ParamSpecSet, K extends keyof T>(
-  plan: Plan,
-  paramSpecSet: T,
-  handleSet: HandleSet<OutputSet<T>>,
-  key: K,
-): OutputType<T[K]> {
-  const handle = handleSet[key];
+  typeSpec: T,
+  handle: Handle<OutputType<T>>,
+): OutputType<T> {
   const dataSlot = plan.dataSlots.get(handle[handleIdKey]);
   if (dataSlot == null) {
     throw new SubFunLogicError("data slot not found");
@@ -596,17 +763,33 @@ function prepareOutput<T extends ParamSpecSet, K extends keyof T>(
       if (dataSlot.body.body.isSet) {
         throw new SubFunLogicError("data slot is already set");
       }
-      const body = paramSpecSet[key].provider.acquire();
+      const body = typeSpec.provider.acquire();
       dataSlot.body.body.value = body;
       return body;
     }
     case "sink": {
       const body = dataSlot.body;
-      return body as T[K];
+      return body as OutputType<T>;
     }
     default:
       return unreachable(type);
   }
+}
+
+function prepareNamedOutput<T extends ParamSpecSet>(
+  plan: Plan,
+  paramSpecSet: T,
+  handleSet: HandleSet<OutputSet<T>>,
+): OutputSet<T> {
+  const partialPrepared: Partial<OutputSet<T>> = {};
+  for (const key in handleSet) {
+    partialPrepared[key] = prepareOutput(
+      plan,
+      paramSpecSet[key],
+      handleSet[key],
+    );
+  }
+  return partialPrepared as OutputSet<T>;
 }
 
 function assertNoLeak(plan: Plan) {

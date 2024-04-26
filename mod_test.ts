@@ -4,7 +4,14 @@ import {
   assertGreater,
   assertGreaterOrEqual,
 } from "./deps.ts";
-import { action, Context, purify, typeSpec } from "./mod.ts";
+import {
+  Context,
+  namedOutputAction,
+  namedOutputPurify,
+  singleOutputAction,
+  singleOutputPurify,
+  typeSpec,
+} from "./mod.ts";
 import { Pool } from "./pool.ts";
 import { Box } from "./box.ts";
 import {
@@ -29,33 +36,33 @@ Deno.test(function calc() {
   );
   const BoxedNumber = typeSpec(boxedNumberPool);
 
-  const add = action(
-    { result: BoxedNumber },
-    ({ result }, l: Box<number>, r: Box<number>) =>
+  const add = singleOutputAction(
+    BoxedNumber,
+    (result, l: Box<number>, r: Box<number>) =>
       result.value = l.value + r.value,
   );
-  const pureAdd = purify(add);
-  const mul = action(
-    { result: BoxedNumber },
-    ({ result }, l: Box<number>, r: Box<number>) =>
+  const pureAdd = singleOutputPurify(add);
+  const mul = singleOutputAction(
+    BoxedNumber,
+    (result, l: Box<number>, r: Box<number>) =>
       result.value = l.value * r.value,
   );
-  const pureMul = purify(mul);
+  const pureMul = singleOutputPurify(mul);
 
   const resultBody = new Box<number>();
 
   new Context().run(({ input, output }) => {
     const result = output(resultBody);
-    const { result: result1 } = pureAdd(
+    const result1 = pureAdd(
       input(Box.withValue(1)),
       input(Box.withValue(2)),
     );
-    const { result: result2 } = pureAdd(
+    const result2 = pureAdd(
       input(Box.withValue(3)),
       input(Box.withValue(4)),
     );
-    const { result: result3 } = pureMul(result1, result2);
-    add({ result }, result3, input(Box.withValue(5)));
+    const result3 = pureMul(result1, result2);
+    add(result, result3, input(Box.withValue(5)));
   }, { assertNoLeak: true });
 
   assertEquals(resultBody.value, 26);
@@ -89,17 +96,17 @@ Deno.test(async function twoOutputs(t) {
     assertFalse(errorReported);
   }
 
-  const divmod = action(
+  const divmod = namedOutputAction(
     { div: BoxedNumber, mod: BoxedNumber },
     ({ div, mod }, l: Box<number>, r: Box<number>) => {
       div.value = Math.floor(l.value / r.value);
       mod.value = l.value % r.value;
     },
   );
-  const pureDivmod = purify(divmod);
-  const add = action(
-    { result: BoxedNumber },
-    ({ result }, l: Box<number>, r: Box<number>) =>
+  const pureDivmod = namedOutputPurify(divmod);
+  const add = singleOutputAction(
+    BoxedNumber,
+    (result, l: Box<number>, r: Box<number>) =>
       result.value = l.value + r.value,
   );
 
@@ -128,7 +135,7 @@ Deno.test(async function twoOutputs(t) {
         input(Box.withValue(42)),
         input(Box.withValue(5)),
       );
-      add({ result }, mod, input(Box.withValue(100)));
+      add(result, mod, input(Box.withValue(100)));
     }, { assertNoLeak: true });
 
     assertEquals(resultBody.value, 102);
@@ -156,18 +163,18 @@ Deno.test(async function outputUsage(t) {
     assertFalse(errorReported);
   }
 
-  const add = action(
-    { result: BoxedNumber },
-    ({ result }, l: Box<number>, r: Box<number>) =>
+  const add = singleOutputAction(
+    BoxedNumber,
+    (result, l: Box<number>, r: Box<number>) =>
       result.value = l.value + r.value,
   );
-  const pureAdd = purify(add);
-  const mul = action(
-    { result: BoxedNumber },
-    ({ result }, l: Box<number>, r: Box<number>) =>
+  const pureAdd = singleOutputPurify(add);
+  const mul = singleOutputAction(
+    BoxedNumber,
+    (result, l: Box<number>, r: Box<number>) =>
       result.value = l.value * r.value,
   );
-  const pureMul = purify(mul);
+  const pureMul = singleOutputPurify(mul);
 
   await t.step(function noOutputsAreUsed() {
     new Context().run(({ input }) => {
@@ -189,12 +196,12 @@ Deno.test(async function outputUsage(t) {
       const result1 = output(result1Body);
       const result2 = output(result2Body);
 
-      const { result: sum } = pureAdd(
+      const sum = pureAdd(
         input(Box.withValue(42)),
         input(Box.withValue(2)),
       );
-      mul({ result: result1 }, sum, input(Box.withValue(3)));
-      add({ result: result2 }, sum, input(Box.withValue(4)));
+      mul(result1, sum, input(Box.withValue(3)));
+      add(result2, sum, input(Box.withValue(4)));
     }, { assertNoLeak: true });
 
     assertPostCondition();
@@ -210,8 +217,8 @@ Deno.test(async function outputUsage(t) {
       const sum = output(sumBody);
       const result = output(resultBody);
 
-      add({ result: sum }, input(Box.withValue(42)), input(Box.withValue(2)));
-      mul({ result }, sum, input(Box.withValue(3)));
+      add(sum, input(Box.withValue(42)), input(Box.withValue(2)));
+      mul(result, sum, input(Box.withValue(3)));
     }, { assertNoLeak: true });
 
     assertPostCondition();
@@ -237,18 +244,18 @@ Deno.test(function calcIO() {
     IPipeBoxW<number>
   >(boxedNumberPool);
 
-  const add = action(
-    { result: BoxedNumber },
-    ({ result }, l: IPipeBoxR<number>, r: IPipeBoxR<number>) =>
+  const add = singleOutputAction(
+    BoxedNumber,
+    (result, l: IPipeBoxR<number>, r: IPipeBoxR<number>) =>
       result.setValue(l.getValue() + r.getValue()),
   );
-  const pureAdd = purify(add);
-  const mul = action(
-    { result: BoxedNumber },
-    ({ result }, l: IPipeBoxR<number>, r: IPipeBoxR<number>) =>
+  const pureAdd = singleOutputPurify(add);
+  const mul = singleOutputAction(
+    BoxedNumber,
+    (result, l: IPipeBoxR<number>, r: IPipeBoxR<number>) =>
       result.setValue(l.getValue() * r.getValue()),
   );
-  const pureMul = purify(mul);
+  const pureMul = singleOutputPurify(mul);
 
   const [input1R, input1W] = pipeBox<number>();
   input1W.setValue(1);
@@ -260,19 +267,19 @@ Deno.test(function calcIO() {
     const result1Handle = output(result1W);
     const result2Handle = output(result2RW);
 
-    const { result: result1 } = pureAdd(
+    const result1 = pureAdd(
       input(input1R),
       input(input2RW),
     );
-    const { result: result2 } = pureAdd(
+    const result2 = pureAdd(
       input(pipeBoxR(3)),
       input(pipeBoxR(4)),
     );
-    const { result: result3 } = pureMul(result1, result2);
+    const result3 = pureMul(result1, result2);
 
     const input5 = input(pipeBoxR(5));
-    add({ result: result1Handle }, result3, input5);
-    mul({ result: result2Handle }, result3, input5);
+    add(result1Handle, result3, input5);
+    mul(result2Handle, result3, input5);
   }, { assertNoLeak: true });
 
   assertEquals(result1R.getValue(), 26);
