@@ -31,43 +31,33 @@ type Handle<T> = {
 type UntypedHandle = Handle<unknown>;
 
 export function getPlan(
-  head:
+  ...handles: (
     | UntypedHandle
-    | (Record<ObjectKey, UntypedHandle>),
-  ...tail: (
-    | UntypedHandle
-    | (Record<ObjectKey, UntypedHandle>)
+    | Record<ObjectKey, UntypedHandle>
+    | UntypedHandle[]
   )[]
 ): Plan {
   function isHandle(
-    x: UntypedHandle | (Record<ObjectKey, UntypedHandle>),
+    x: UntypedHandle | Record<ObjectKey, UntypedHandle> | UntypedHandle[],
   ): x is UntypedHandle {
     return parentPlanKey in x;
   }
 
   let plan: Plan | undefined;
-  if (isHandle(head)) {
-    plan = head[parentPlanKey];
-  } else {
-    for (const k in head) {
-      const p = head[k][parentPlanKey];
-      if (plan != null && p !== plan) {
-        throw new SubFunError("Plan inconsitent");
-      }
-      plan = p;
-    }
-  }
-
-  for (const t of tail) {
+  for (const t of handles) {
     if (isHandle(t)) {
       const p = t[parentPlanKey];
-      if (plan != null && p !== plan) {
+      if (plan == null) {
+        plan = p;
+      } else if (p !== plan) {
         throw new SubFunError("Plan inconsitent");
       }
     } else {
       for (const k in t) {
         const p = t[k][parentPlanKey];
-        if (plan != null && p !== plan) {
+        if (plan == null) {
+          plan = p;
+        } else if (p !== plan) {
           throw new SubFunError("Plan inconsitent");
         }
       }
@@ -149,7 +139,7 @@ export function purify<I extends readonly unknown[], O extends ParamSpecSet>(
 {
   const action = rawAction[actionKey];
   return (...inputArgs: HandleSet<I>): HandleSet<InputSet<O>> => {
-    const plan = getPlan(inputArgs[0], ...inputArgs); // FIXME: remove duplicated first arg ref
+    const plan = getPlan(...inputArgs);
 
     const partialOutputSet: Partial<HandleSet<OutputSet<O>>> = {};
     for (const key in action.o) {
