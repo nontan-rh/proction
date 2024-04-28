@@ -148,7 +148,7 @@ export function singleOutputAction<
     const invocation: Invocation = {
       id,
       outputMode: outputModeSingle,
-      action: action as unknown as UntypedAction, // FIXME: remove `as unknown`
+      action: action as unknown as SingleOutputUntypedAction, // FIXME: remove `as unknown`
       inputArgs,
       output,
     };
@@ -187,7 +187,7 @@ export function namedOutputAction<
     const invocation: Invocation = {
       id,
       outputMode: outputModeNamed,
-      action: action as unknown as UntypedAction, // FIXME: remove `as unknown`
+      action: action as unknown as NamedOutputUntypedAction, // FIXME: remove `as unknown`
       inputArgs,
       outputSet,
     };
@@ -258,14 +258,14 @@ type Invocation = SingleOutputInvocation | NamedOutputInvocation;
 type SingleOutputInvocation = {
   id: InvocationID;
   outputMode: typeof outputModeSingle;
-  action: UntypedAction;
+  action: SingleOutputUntypedAction;
   inputArgs: readonly UntypedHandle[];
   output: UntypedHandle;
 };
 type NamedOutputInvocation = {
   id: InvocationID;
   outputMode: typeof outputModeNamed;
-  action: UntypedAction;
+  action: NamedOutputUntypedAction;
   inputArgs: readonly UntypedHandle[];
   outputSet: Record<ObjectKey, UntypedHandle>;
 };
@@ -428,17 +428,10 @@ function run(
     plan.state = "running";
 
     for (const invocation of invocations) {
-      const action = invocation.action;
-      if (action == null) {
-        throw new SubFunLogicError("action not found");
-      }
-
-      const outputMode = action.outputMode;
+      const outputMode = invocation.outputMode;
       switch (outputMode) {
         case "single": {
-          if (invocation.outputMode !== outputModeSingle) {
-            throw new SubFunLogicError("output mode mismatch");
-          }
+          const action = invocation.action;
           const restoredInputs = restoreArgs(plan, invocation.inputArgs);
           const preparedOutputs = prepareOutput(
             plan,
@@ -451,9 +444,7 @@ function run(
           break;
         }
         case "named": {
-          if (invocation.outputMode !== outputModeNamed) {
-            throw new SubFunLogicError("output mode mismatch");
-          }
+          const action = invocation.action;
           const restoredInputs = restoreArgs(plan, invocation.inputArgs);
           const preparedOutputs = prepareNamedOutput(
             plan,
@@ -582,11 +573,12 @@ function prepareDataSlots(
 ): void {
   for (const invocation of invocations) {
     // reserve intermediate inputs
-    const action = invocation.action;
     for (const inputArg of invocation.inputArgs) {
       const dataSlot = plan.dataSlots.get(inputArg[handleIdKey]);
       if (dataSlot == null) {
-        throw new SubFunLogicError(`dataSlot not found for handle: ${input}`);
+        throw new SubFunLogicError(
+          `dataSlot not found for handle: ${input}`,
+        );
       }
 
       const type = dataSlot.type;
@@ -604,20 +596,18 @@ function prepareDataSlots(
     }
 
     // create intermediate outputs if needed
-    const outputMode = action.outputMode;
+    const outputMode = invocation.outputMode;
     switch (outputMode) {
       case "single": {
-        if (invocation.outputMode !== outputModeSingle) {
-          throw new SubFunLogicError("output mode mismatch");
-        }
-        prepareIntermediateOutput(plan, action.o, invocation.output);
+        prepareIntermediateOutput(plan, invocation.action.o, invocation.output);
         break;
       }
       case "named": {
-        if (invocation.outputMode !== outputModeNamed) {
-          throw new SubFunLogicError("output mode mismatch");
-        }
-        prepareNamedIntermediateOutput(plan, action.o, invocation.outputSet);
+        prepareNamedIntermediateOutput(
+          plan,
+          invocation.action.o,
+          invocation.outputSet,
+        );
         break;
       }
       default:
