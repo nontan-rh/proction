@@ -5,7 +5,7 @@ import {
   unreachable,
 } from "./error.ts";
 import { Brand } from "./brand.ts";
-import { Provider } from "./provider.ts";
+import { Provided, Provider, ProviderWrap } from "./provider.ts";
 import { Box } from "./box.ts";
 import { Rc } from "./rc.ts";
 
@@ -86,22 +86,22 @@ type SingleOutputAction<
   O extends TypeSpec<unknown, unknown, unknown>,
 > = {
   outputMode: typeof outputModeSingle;
-  f: (output: OutputType<O>, ...inputArgs: I) => void;
+  f(output: OutputType<O>, ...inputArgs: I): void; // bivariant
   o: O;
 };
 type NamedOutputAction<I extends readonly unknown[], O extends ParamSpecSet> = {
   outputMode: typeof outputModeNamed;
-  f: (outputSet: OutputSet<O>, ...inputArgs: I) => void;
+  f(outputSet: OutputSet<O>, ...inputArgs: I): void; // bivariant
   o: O;
 };
 type SingleOutputUntypedAction = {
   outputMode: typeof outputModeSingle;
-  f: (output: unknown, ...inputArgs: readonly unknown[]) => void;
+  f(output: unknown, ...inputArgs: readonly unknown[]): void; // bivariant
   o: TypeSpec<unknown, unknown, unknown>;
 };
 type NamedOutputUntypedAction = {
   outputMode: typeof outputModeNamed;
-  f: (outputSet: unknown, ...inputArgs: readonly unknown[]) => void;
+  f(outputSet: unknown, ...inputArgs: readonly unknown[]): void; // bivariant
   o: ParamSpecSet;
 };
 type UntypedAction = SingleOutputUntypedAction | NamedOutputUntypedAction;
@@ -148,7 +148,7 @@ export function singleOutputAction<
     const invocation: Invocation = {
       id,
       outputMode: outputModeSingle,
-      action: action as unknown as SingleOutputUntypedAction, // FIXME: remove `as unknown`
+      action,
       inputArgs,
       output,
     };
@@ -187,7 +187,7 @@ export function namedOutputAction<
     const invocation: Invocation = {
       id,
       outputMode: outputModeNamed,
-      action: action as unknown as NamedOutputUntypedAction, // FIXME: remove `as unknown`
+      action,
       inputArgs,
       outputSet,
     };
@@ -320,7 +320,10 @@ type DataSlot =
   | IntermediateSlot
   | SinkSlot;
 type SourceSlot = { type: "source"; body: unknown };
-type IntermediateSlot = { type: "intermediate"; body: Rc<Box<unknown>> };
+type IntermediateSlot = {
+  type: "intermediate";
+  body: Rc<Box<Provided<unknown>>>;
+};
 type SinkSlot = { type: "sink"; body: unknown };
 
 export type ParamSpecSet = {
@@ -330,7 +333,7 @@ export type ParamSpecSet = {
 const inputPhantomTypeKey = Symbol("inputType");
 const outputPhantomTypeKey = Symbol("outputType");
 export type TypeSpec<T extends I & O, I, O> = {
-  provider: Provider<T>;
+  provider: ProviderWrap<T>;
   [inputPhantomTypeKey]: I;
   [outputPhantomTypeKey]: O;
 };
@@ -352,7 +355,7 @@ type OutputSet<S extends ParamSpecSet> = {
 export function typeSpec<T extends I & O, I = T, O = T>(
   provider: Provider<T>,
 ): TypeSpec<T, I, O> {
-  return { provider } as TypeSpec<T, I, O>;
+  return { provider: new ProviderWrap(provider) } as TypeSpec<T, I, O>;
 }
 
 function input<T extends object>(plan: Plan, value: T): Handle<T> {
@@ -599,13 +602,12 @@ function prepareDataSlots(
     const outputMode = invocation.outputMode;
     switch (outputMode) {
       case "single": {
-        prepareIntermediateOutput(plan, invocation.action.o, invocation.output);
+        prepareIntermediateOutput(plan, invocation.output);
         break;
       }
       case "named": {
         prepareNamedIntermediateOutput(
           plan,
-          invocation.action.o,
           invocation.outputSet,
         );
         break;
@@ -618,7 +620,6 @@ function prepareDataSlots(
 
 function prepareIntermediateOutput(
   plan: Plan,
-  typeSpec: TypeSpec<unknown, unknown, unknown>,
   output: UntypedHandle,
 ) {
   const dataSlot = plan.dataSlots.get(output[handleIdKey]);
@@ -630,7 +631,7 @@ function prepareIntermediateOutput(
         if (!x.isSet) {
           return;
         }
-        typeSpec.provider.release(x.value);
+        x.value.release();
       }, console.error),
     });
   } else {
@@ -650,13 +651,11 @@ function prepareIntermediateOutput(
 
 function prepareNamedIntermediateOutput<T extends ParamSpecSet>(
   plan: Plan,
-  paramSpecSet: T,
   handleSet: HandleSet<OutputSet<T>>,
 ) {
   for (const outputKey in handleSet) {
     prepareIntermediateOutput(
       plan,
-      paramSpecSet[outputKey],
       handleSet[outputKey],
     );
   }
@@ -691,7 +690,7 @@ function restore<T>(plan: Plan, handle: Handle<T>): T {
       if (!dataSlot.body.body.isSet) {
         throw new SubFunLogicError("data slot is not set yet");
       }
-      return dataSlot.body.body.value as T;
+      return dataSlot.body.body.value.body as T;
     case "sink": {
       const body = dataSlot.body;
       return body as T;
@@ -755,7 +754,7 @@ function prepareOutput<T extends TypeSpec<unknown, unknown, unknown>>(
       }
       const body = typeSpec.provider.acquire();
       dataSlot.body.body.value = body;
-      return body;
+      return body.body;
     }
     case "sink": {
       const body = dataSlot.body;
