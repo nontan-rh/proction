@@ -1,18 +1,22 @@
 import { SubFunLogicError } from "./error.ts";
 
-// Invariant
-export interface Provider<T> {
-  acquire(): T;
+interface Releaser<T> {
   release(x: T): void;
 }
 
-// Covariant wrapper for Provider<T>
-export class ProviderWrap<T> {
-  acquire: () => Provided<T>;
+// Invariant
+export interface Provider<T, Args extends readonly unknown[]>
+  extends Releaser<T> {
+  acquire(...args: Args): T;
+}
 
-  constructor(provider: Provider<T>) {
-    this.acquire = () => {
-      const body = provider.acquire();
+// Covariant wrapper for Provider<T>
+export class ProviderWrap<T, Args extends readonly unknown[]> {
+  acquire: (...args: Args) => Provided<T>;
+
+  constructor(provider: Provider<T, Args>) {
+    this.acquire = (...args: Args) => {
+      const body = provider.acquire(...args);
       return new Provided(provider, body);
     };
   }
@@ -22,7 +26,7 @@ export class Provided<T> {
   #body?: T;
   release: () => void;
 
-  constructor(provider: Provider<T>, body: T) {
+  constructor(releaser: Releaser<T>, body: T) {
     this.#body = body;
     this.release = () => {
       const body = this.#body;
@@ -30,7 +34,7 @@ export class Provided<T> {
         return;
       }
       this.#body = undefined;
-      provider.release(body);
+      releaser.release(body);
     };
   }
 

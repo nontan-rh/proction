@@ -333,13 +333,13 @@ export type ParamSpecSet = {
 const inputPhantomTypeKey = Symbol("inputType");
 const outputPhantomTypeKey = Symbol("outputType");
 export type TypeSpec<T extends I & O, I, O> = {
-  provider: ProviderWrap<T>;
+  provider: ProviderWrap<T, []>;
   [inputPhantomTypeKey]: I;
   [outputPhantomTypeKey]: O;
 };
 
 type ProvidedType<S extends TypeSpec<unknown, unknown, unknown>> =
-  S["provider"] extends Provider<infer X> ? X : never;
+  S["provider"] extends Provider<infer X, infer _> ? X : never;
 type InputType<S extends TypeSpec<unknown, unknown, unknown>> =
   S[typeof inputPhantomTypeKey];
 type OutputType<S extends TypeSpec<unknown, unknown, unknown>> =
@@ -353,7 +353,7 @@ type OutputSet<S extends ParamSpecSet> = {
 };
 
 export function typeSpec<T extends I & O, I = T, O = T>(
-  provider: Provider<T>,
+  provider: Provider<T, unknown[]>,
 ): TypeSpec<T, I, O> {
   return { provider: new ProviderWrap(provider) } as TypeSpec<T, I, O>;
 }

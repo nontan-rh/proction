@@ -1,7 +1,7 @@
 import { Provider } from "./provider.ts";
 
-export class Pool<T> implements Provider<T> {
-  #create: () => T;
+export class Pool<T, Args extends readonly unknown[]> implements Provider<T, Args> {
+  #create: (...args: Args) => T;
   #cleanup: (x: T) => void;
   #reportError: (e: unknown) => void;
   #pooledCells: { body: T }[] = [];
@@ -12,7 +12,7 @@ export class Pool<T> implements Provider<T> {
   #taintedCount = 0;
 
   constructor(
-    create: () => T,
+    create: (...args: Args) => T,
     cleanup: (x: T) => void,
     reportError: (e: unknown) => void,
   ) {
@@ -33,10 +33,10 @@ export class Pool<T> implements Provider<T> {
     return this.#taintedCount;
   }
 
-  acquire(): T {
+  acquire(...args: Args): T {
     const pooledCell = this.#pooledCells.pop();
     if (pooledCell == null) {
-      const body = this.#create();
+      const body = this.#create(...args);
       this.#acquiredCount++;
       return body;
     }

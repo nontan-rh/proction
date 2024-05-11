@@ -26,7 +26,7 @@ import {
 Deno.test(function calc() {
   let errorReported = false;
 
-  const boxedNumberPool = new Pool<Box<number>>(
+  const boxedNumberPool = new Pool<Box<number>, []>(
     () => new Box<number>(),
     (x) => x.clear(),
     (e) => {
@@ -79,7 +79,7 @@ Deno.test(function empty() {
 Deno.test(async function twoOutputs(t) {
   let errorReported = false;
 
-  const boxedNumberPool = new Pool<Box<number>>(
+  const boxedNumberPool = new Pool<Box<number>, []>(
     () => new Box<number>(),
     (x) => x.clear(),
     (e) => {
@@ -146,7 +146,7 @@ Deno.test(async function twoOutputs(t) {
 Deno.test(async function outputUsage(t) {
   let errorReported = false;
 
-  const boxedNumberPool = new Pool<Box<number>>(
+  const boxedNumberPool = new Pool<Box<number>, []>(
     () => new Box<number>(),
     (x) => x.clear(),
     (e) => {
@@ -230,7 +230,7 @@ Deno.test(async function outputUsage(t) {
 Deno.test(function calcIO() {
   let errorReported = false;
 
-  const boxedNumberPool = new Pool<IPipeBoxRW<number>>(
+  const boxedNumberPool = new Pool<IPipeBoxRW<number>, []>(
     () => pipeBoxRW<number>(),
     (x) => x.clear(),
     (e) => {
