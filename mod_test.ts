@@ -240,6 +240,7 @@ Deno.test(function calcIO() {
   );
   const BoxedNumber = typeSpec<
     IPipeBoxRW<number>,
+    [],
     IPipeBoxR<number>,
     IPipeBoxW<number>
   >(boxedNumberPool);

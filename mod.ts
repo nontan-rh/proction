@@ -78,7 +78,7 @@ const outputModeNamed = "named" as const;
 
 type SingleOutputAction<
   I extends readonly unknown[],
-  O extends TypeSpec<unknown, unknown, unknown>,
+  O extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
 > = {
   outputMode: typeof outputModeSingle;
   f(output: OutputType<O>, ...inputArgs: I): void; // bivariant
@@ -92,7 +92,7 @@ type NamedOutputAction<I extends readonly unknown[], O extends ParamSpecSet> = {
 type SingleOutputUntypedAction = {
   outputMode: typeof outputModeSingle;
   f(output: unknown, ...inputArgs: readonly unknown[]): void; // bivariant
-  o: TypeSpec<unknown, unknown, unknown>;
+  o: TypeSpec<unknown, readonly unknown[], unknown, unknown>;
 };
 type NamedOutputUntypedAction = {
   outputMode: typeof outputModeNamed;
@@ -104,7 +104,7 @@ type UntypedAction = SingleOutputUntypedAction | NamedOutputUntypedAction;
 const actionKey = Symbol("action");
 type SingleOutputActionMeta<
   I extends readonly unknown[],
-  O extends TypeSpec<unknown, unknown, unknown>,
+  O extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
 > = {
   [actionKey]: SingleOutputAction<I, O>;
 };
@@ -117,7 +117,7 @@ type NamedOutputActionMeta<
 
 export function singleOutputAction<
   I extends readonly unknown[],
-  O extends TypeSpec<unknown, unknown, unknown>,
+  O extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
 >(
   o: O,
   f: (output: OutputType<O>, ...inputArgs: I) => void,
@@ -195,7 +195,7 @@ export function namedOutputAction<
 
 export function singleOutputPurify<
   I extends readonly unknown[],
-  O extends TypeSpec<unknown, unknown, unknown>,
+  O extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
 >(
   rawAction:
     & ((
@@ -322,23 +322,29 @@ type IntermediateSlot = {
 type SinkSlot = { type: "sink"; body: unknown };
 
 export type ParamSpecSet = {
-  [key: ObjectKey]: TypeSpec<unknown, unknown, unknown>;
+  [key: ObjectKey]: TypeSpec<unknown, readonly unknown[], unknown, unknown>;
 };
 
 const inputPhantomTypeKey = Symbol("inputType");
 const outputPhantomTypeKey = Symbol("outputType");
-export type TypeSpec<T extends I & O, I, O> = {
-  provider: ProviderWrap<T, []>;
+export type TypeSpec<T extends I & O, Args extends readonly unknown[], I, O> = {
+  provider: ProviderWrap<T, Args>;
   [inputPhantomTypeKey]: I;
   [outputPhantomTypeKey]: O;
 };
 
-type ProvidedType<S extends TypeSpec<unknown, unknown, unknown>> =
-  S["provider"] extends Provider<infer X, infer _> ? X : never;
-type InputType<S extends TypeSpec<unknown, unknown, unknown>> =
-  S[typeof inputPhantomTypeKey];
-type OutputType<S extends TypeSpec<unknown, unknown, unknown>> =
-  S[typeof outputPhantomTypeKey];
+type ProvidedType<
+  S extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
+> = S["provider"] extends Provider<infer X, infer _> ? X : never;
+type ArgsType<
+  S extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
+> = S["provider"] extends Provider<infer _, infer X> ? X : never;
+type InputType<
+  S extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
+> = S[typeof inputPhantomTypeKey];
+type OutputType<
+  S extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
+> = S[typeof outputPhantomTypeKey];
 
 type InputSet<S extends ParamSpecSet> = {
   [key in keyof S]: InputType<S[key]>;
@@ -347,10 +353,15 @@ type OutputSet<S extends ParamSpecSet> = {
   [key in keyof S]: OutputType<S[key]>;
 };
 
-export function typeSpec<T extends I & O, I = T, O = T>(
-  provider: Provider<T, unknown[]>,
-): TypeSpec<T, I, O> {
-  return { provider: new ProviderWrap(provider) } as TypeSpec<T, I, O>;
+export function typeSpec<
+  T extends I & O,
+  Args extends readonly unknown[],
+  I = T,
+  O = T,
+>(
+  provider: Provider<T, Args>,
+): TypeSpec<T, Args, I, O> {
+  return { provider: new ProviderWrap(provider) } as TypeSpec<T, Args, I, O>;
 }
 
 function input<T extends object>(plan: Plan, value: T): Handle<T> {
@@ -729,7 +740,9 @@ function decRef<T>(plan: Plan, handle: Handle<T>): void {
   }
 }
 
-function prepareOutput<T extends TypeSpec<unknown, unknown, unknown>>(
+function prepareOutput<
+  T extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
+>(
   plan: Plan,
   typeSpec: T,
   handle: Handle<OutputType<T>>,
