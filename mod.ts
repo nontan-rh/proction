@@ -83,21 +83,41 @@ type SingleOutputAction<
   outputMode: typeof outputModeSingle;
   f(output: OutputType<O>, ...inputArgs: I): void; // bivariant
   o: O;
+  allocator(
+    provider: ProviderType<O>,
+    ...inputArgs: I
+  ): Provided<ProvidedType<O>>; // bivariant
 };
 type NamedOutputAction<I extends readonly unknown[], O extends ParamSpecSet> = {
   outputMode: typeof outputModeNamed;
   f(outputSet: OutputSet<O>, ...inputArgs: I): void; // bivariant
   o: O;
+  allocators: {
+    [key in keyof OutputSet<O>]: (
+      provider: ProviderType<O[key]>,
+      ...inputArgs: I
+    ) => Provided<ProvidedType<O[key]>>;
+  };
 };
 type SingleOutputUntypedAction = {
   outputMode: typeof outputModeSingle;
   f(output: unknown, ...inputArgs: readonly unknown[]): void; // bivariant
   o: TypeSpec<unknown, readonly unknown[], unknown, unknown>;
+  allocator(
+    provider: ProviderWrap<unknown, readonly unknown[]>,
+    ...inputArgs: readonly unknown[]
+  ): Provided<unknown>; // bivariant
 };
 type NamedOutputUntypedAction = {
   outputMode: typeof outputModeNamed;
   f(outputSet: unknown, ...inputArgs: readonly unknown[]): void; // bivariant
   o: ParamSpecSet;
+  allocators: {
+    [key: string]: (
+      provider: ProviderWrap<unknown, readonly unknown[]>,
+      ...inputArgs: readonly unknown[]
+    ) => Provided<unknown>;
+  };
 };
 type UntypedAction = SingleOutputUntypedAction | NamedOutputUntypedAction;
 
@@ -120,6 +140,10 @@ export function singleOutputAction<
   O extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
 >(
   o: O,
+  allocator: (
+    provider: ProviderType<O>,
+    ...inputArgs: I
+  ) => Provided<ProvidedType<O>>,
   f: (output: OutputType<O>, ...inputArgs: I) => void,
 ):
   & ((
@@ -131,6 +155,7 @@ export function singleOutputAction<
     outputMode: outputModeSingle,
     f,
     o,
+    allocator,
   };
 
   const g = (
@@ -159,6 +184,12 @@ export function namedOutputAction<
   O extends ParamSpecSet,
 >(
   o: O,
+  allocators: {
+    [key in keyof OutputSet<O>]: (
+      provider: ProviderType<O[key]>,
+      ...inputArgs: I
+    ) => Provided<ProvidedType<O[key]>>;
+  },
   f: (outputSet: OutputSet<O>, ...inputArgs: I) => void,
 ):
   & ((
@@ -170,6 +201,7 @@ export function namedOutputAction<
     outputMode: outputModeNamed,
     f,
     o,
+    allocators,
   };
 
   const g = (
@@ -182,7 +214,7 @@ export function namedOutputAction<
     const invocation: Invocation = {
       id,
       outputMode: outputModeNamed,
-      action,
+      action: action as unknown as NamedOutputUntypedAction,
       inputArgs,
       outputSet,
     };
@@ -333,12 +365,15 @@ export type TypeSpec<T extends I & O, Args extends readonly unknown[], I, O> = {
   [outputPhantomTypeKey]: O;
 };
 
+type ProviderType<
+  S extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
+> = S["provider"];
 type ProvidedType<
   S extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
-> = S["provider"] extends Provider<infer X, infer _> ? X : never;
+> = S["provider"] extends ProviderWrap<infer X, infer _> ? X : never;
 type ArgsType<
   S extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
-> = S["provider"] extends Provider<infer _, infer X> ? X : never;
+> = S["provider"] extends ProviderWrap<infer _, infer X> ? X : never;
 type InputType<
   S extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
 > = S[typeof inputPhantomTypeKey];
@@ -446,6 +481,8 @@ function run(
             plan,
             action.o,
             invocation.output,
+            restoredInputs,
+            action.allocator,
           );
           action.f(preparedOutputs, ...restoredInputs);
           decRefArray(plan, invocation.inputArgs);
@@ -459,6 +496,8 @@ function run(
             plan,
             action.o,
             invocation.outputSet,
+            restoredInputs,
+            action.allocators,
           );
           action.f(preparedOutputs, ...restoredInputs);
           decRefArray(plan, invocation.inputArgs);
@@ -742,10 +781,16 @@ function decRef<T>(plan: Plan, handle: Handle<T>): void {
 
 function prepareOutput<
   T extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
+  I extends readonly unknown[],
 >(
   plan: Plan,
   typeSpec: T,
   handle: Handle<OutputType<T>>,
+  inputs: I,
+  allocator: (
+    provider: ProviderType<T>,
+    ...inputArgs: I
+  ) => Provided<ProvidedType<T>>,
 ): OutputType<T> {
   const dataSlot = plan.dataSlots.get(handle[handleIdKey]);
   if (dataSlot == null) {
@@ -760,7 +805,7 @@ function prepareOutput<
       if (dataSlot.body.body.isSet) {
         throw new LogicError("data slot is already set");
       }
-      const body = typeSpec.provider.acquire();
+      const body = allocator(typeSpec.provider, ...inputs);
       dataSlot.body.body.value = body;
       return body.body;
     }
@@ -773,10 +818,20 @@ function prepareOutput<
   }
 }
 
-function prepareNamedOutput<T extends ParamSpecSet>(
+function prepareNamedOutput<
+  T extends ParamSpecSet,
+  I extends readonly unknown[],
+>(
   plan: Plan,
   paramSpecSet: T,
   handleSet: HandleSet<OutputSet<T>>,
+  inputs: I,
+  allocators: {
+    [key in keyof OutputSet<T>]: (
+      provider: ProviderType<T[key]>,
+      ...inputArgs: I
+    ) => Provided<ProvidedType<T[key]>>;
+  },
 ): OutputSet<T> {
   const partialPrepared: Partial<OutputSet<T>> = {};
   for (const key in handleSet) {
@@ -784,6 +839,8 @@ function prepareNamedOutput<T extends ParamSpecSet>(
       plan,
       paramSpecSet[key],
       handleSet[key],
+      inputs,
+      allocators[key],
     );
   }
   return partialPrepared as OutputSet<T>;

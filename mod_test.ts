@@ -38,12 +38,14 @@ Deno.test(function calc() {
 
   const add = singleOutputAction(
     BoxedNumber,
+    (provider, _l, _r) => provider.acquire(),
     (result, l: Box<number>, r: Box<number>) =>
       result.value = l.value + r.value,
   );
   const pureAdd = singleOutputPurify(add);
   const mul = singleOutputAction(
     BoxedNumber,
+    (provider, _l, _r) => provider.acquire(),
     (result, l: Box<number>, r: Box<number>) =>
       result.value = l.value * r.value,
   );
@@ -98,6 +100,10 @@ Deno.test(async function twoOutputs(t) {
 
   const divmod = namedOutputAction(
     { div: BoxedNumber, mod: BoxedNumber },
+    {
+      div: (provider, _l, _r) => provider.acquire(),
+      mod: (provider, _l, _r) => provider.acquire(),
+    },
     ({ div, mod }, l: Box<number>, r: Box<number>) => {
       div.value = Math.floor(l.value / r.value);
       mod.value = l.value % r.value;
@@ -106,6 +112,7 @@ Deno.test(async function twoOutputs(t) {
   const pureDivmod = namedOutputPurify(divmod);
   const add = singleOutputAction(
     BoxedNumber,
+    (provider, _l, _r) => provider.acquire(),
     (result, l: Box<number>, r: Box<number>) =>
       result.value = l.value + r.value,
   );
@@ -165,12 +172,14 @@ Deno.test(async function outputUsage(t) {
 
   const add = singleOutputAction(
     BoxedNumber,
+    (provider, _l, _r) => provider.acquire(),
     (result, l: Box<number>, r: Box<number>) =>
       result.value = l.value + r.value,
   );
   const pureAdd = singleOutputPurify(add);
   const mul = singleOutputAction(
     BoxedNumber,
+    (provider, _l, _r) => provider.acquire(),
     (result, l: Box<number>, r: Box<number>) =>
       result.value = l.value * r.value,
   );
@@ -247,12 +256,14 @@ Deno.test(function calcIO() {
 
   const add = singleOutputAction(
     BoxedNumber,
+    (provider, _l, _r) => provider.acquire(),
     (result, l: IPipeBoxR<number>, r: IPipeBoxR<number>) =>
       result.setValue(l.getValue() + r.getValue()),
   );
   const pureAdd = singleOutputPurify(add);
   const mul = singleOutputAction(
     BoxedNumber,
+    (provider, _l, _r) => provider.acquire(),
     (result, l: IPipeBoxR<number>, r: IPipeBoxR<number>) =>
       result.setValue(l.getValue() * r.getValue()),
   );
