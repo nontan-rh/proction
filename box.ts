@@ -1,4 +1,4 @@
-import { SubFunLogicError } from "./error.ts";
+import { LogicError } from "./error.ts";
 
 export class Box<T> {
   #value: [T] | [] = [];
@@ -12,7 +12,7 @@ export class Box<T> {
   get value(): T {
     const v = this.#value;
     if (v.length === 0) {
-      throw new SubFunLogicError("Box is not initialized");
+      throw new LogicError("Box is not initialized");
     }
     return v[0];
   }

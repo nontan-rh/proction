@@ -1,9 +1,4 @@
-import {
-  SubFunAssertionError,
-  SubFunError,
-  SubFunLogicError,
-  unreachable,
-} from "./error.ts";
+import { AssertionError, BaseError, LogicError, unreachable } from "./error.ts";
 import { Brand } from "./brand.ts";
 import { Provided, Provider, ProviderWrap } from "./provider.ts";
 import { Box } from "./box.ts";
@@ -50,7 +45,7 @@ export function getPlan(
       if (plan == null) {
         plan = p;
       } else if (p !== plan) {
-        throw new SubFunError("Plan inconsitent");
+        throw new BaseError("Plan inconsitent");
       }
     } else {
       for (const k in t) {
@@ -58,14 +53,14 @@ export function getPlan(
         if (plan == null) {
           plan = p;
         } else if (p !== plan) {
-          throw new SubFunError("Plan inconsitent");
+          throw new BaseError("Plan inconsitent");
         }
       }
     }
   }
 
   if (plan == null) {
-    throw new SubFunError("Failed to detect plan");
+    throw new BaseError("Failed to detect plan");
   }
 
   return plan;
@@ -366,7 +361,7 @@ function input<T extends object>(plan: Plan, value: T): Handle<T> {
 
   // validation
   if (plan.outputCache.has(value)) {
-    throw new SubFunError("the value is already specified as output");
+    throw new BaseError("the value is already specified as output");
   }
 
   const handle = plan.generateHandle();
@@ -388,7 +383,7 @@ function output<T extends object>(plan: Plan, value: T): Handle<T> {
 
   // validation
   if (plan.inputCache.has(value)) {
-    throw new SubFunError("the value is already specified as input");
+    throw new BaseError("the value is already specified as input");
   }
 
   const handle = plan.generateHandle();
@@ -417,7 +412,7 @@ function run(
   const fixedOptions = { ...defaultRunOptions, ...options };
 
   if (plan.state !== "initial") {
-    throw new SubFunError(
+    throw new BaseError(
       `invalid state precondition for run(): ${plan.state}`,
     );
   }
@@ -490,7 +485,7 @@ function prepareInvocations(
       case "single": {
         const output = invocation.output;
         if (outputToInvocation.has(output[handleIdKey])) {
-          throw new SubFunLogicError("the output have two parent invocations");
+          throw new LogicError("the output have two parent invocations");
         }
         outputToInvocation.set(output[handleIdKey], invocation);
         break;
@@ -499,7 +494,7 @@ function prepareInvocations(
         for (const outputKey in invocation.outputSet) {
           const output = invocation.outputSet[outputKey];
           if (outputToInvocation.has(output[handleIdKey])) {
-            throw new SubFunLogicError(
+            throw new LogicError(
               "the output have two parent invocations",
             );
           }
@@ -519,7 +514,7 @@ function prepareInvocations(
     if (state === "permanent") {
       return;
     } else if (state === "temporary") {
-      throw new SubFunLogicError("the computation graph has a cycle");
+      throw new LogicError("the computation graph has a cycle");
     }
 
     visitedInvocations.set(invocationID, "temporary");
@@ -541,7 +536,7 @@ function prepareInvocations(
         case "source":
           return;
         case "intermediate":
-          throw new SubFunLogicError(`unexpected data slot type: ${type}`);
+          throw new LogicError(`unexpected data slot type: ${type}`);
         case "sink":
           break;
         default:
@@ -551,7 +546,7 @@ function prepareInvocations(
 
     const parentInvocation = outputToInvocation.get(handleId);
     if (parentInvocation == null) {
-      throw new SubFunLogicError(
+      throw new LogicError(
         `parent invocation not found for handle: ${handleId}`,
       );
     }
@@ -579,7 +574,7 @@ function prepareDataSlots(
     for (const inputArg of invocation.inputArgs) {
       const dataSlot = plan.dataSlots.get(inputArg[handleIdKey]);
       if (dataSlot == null) {
-        throw new SubFunLogicError(
+        throw new LogicError(
           `dataSlot not found for handle: ${input}`,
         );
       }
@@ -638,9 +633,9 @@ function prepareIntermediateOutput(
     const type = dataSlot.type;
     switch (type) {
       case "source":
-        throw new SubFunLogicError(`unexpected data slot type: ${type}`);
+        throw new LogicError(`unexpected data slot type: ${type}`);
       case "intermediate":
-        throw new SubFunLogicError(`unexpected data slot type: ${type}`);
+        throw new LogicError(`unexpected data slot type: ${type}`);
       case "sink":
         break;
       default:
@@ -675,7 +670,7 @@ function restoreArgs(
 function restore<T>(plan: Plan, handle: Handle<T>): T {
   const dataSlot = plan.dataSlots.get(handle[handleIdKey]);
   if (dataSlot == null) {
-    throw new SubFunLogicError(
+    throw new LogicError(
       `datum not saved for handle: ${handle}`,
     );
   }
@@ -688,7 +683,7 @@ function restore<T>(plan: Plan, handle: Handle<T>): T {
     }
     case "intermediate":
       if (!dataSlot.body.body.isSet) {
-        throw new SubFunLogicError("data slot is not set yet");
+        throw new LogicError("data slot is not set yet");
       }
       return dataSlot.body.body.value.body as T;
     case "sink": {
@@ -715,7 +710,7 @@ function decRefSet<T>(plan: Plan, handleSet: HandleSet<T>): void {
 function decRef<T>(plan: Plan, handle: Handle<T>): void {
   const dataSlot = plan.dataSlots.get(handle[handleIdKey]);
   if (dataSlot == null) {
-    throw new SubFunLogicError(
+    throw new LogicError(
       `data slot not saved for handle: ${handle}`,
     );
   }
@@ -741,16 +736,16 @@ function prepareOutput<T extends TypeSpec<unknown, unknown, unknown>>(
 ): OutputType<T> {
   const dataSlot = plan.dataSlots.get(handle[handleIdKey]);
   if (dataSlot == null) {
-    throw new SubFunLogicError("data slot not found");
+    throw new LogicError("data slot not found");
   }
 
   const type = dataSlot.type;
   switch (type) {
     case "source":
-      throw new SubFunLogicError(`unexpected data slot type: ${type}`);
+      throw new LogicError(`unexpected data slot type: ${type}`);
     case "intermediate": {
       if (dataSlot.body.body.isSet) {
-        throw new SubFunLogicError("data slot is already set");
+        throw new LogicError("data slot is already set");
       }
       const body = typeSpec.provider.acquire();
       dataSlot.body.body.value = body;
@@ -789,7 +784,7 @@ function assertNoLeak(plan: Plan) {
         break;
       case "intermediate":
         if (!dataSlot.body.isFreed) {
-          throw new SubFunAssertionError(
+          throw new AssertionError(
             "intermediate data slot is not freed",
           );
         }

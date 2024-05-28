@@ -1,4 +1,4 @@
-import { SubFunLogicError } from "./error.ts";
+import { LogicError } from "./error.ts";
 
 export class Rc<T> {
   #body: T;
@@ -53,7 +53,7 @@ export class Rc<T> {
 
   #assertNotFreed(): void {
     if (this.isFreed) {
-      throw new SubFunLogicError("this reference counter is already freed");
+      throw new LogicError("this reference counter is already freed");
     }
   }
 }

@@ -1,9 +1,9 @@
-export class SubFunError extends Error {}
+export class BaseError extends Error {}
 
-export class SubFunLogicError extends SubFunError {}
+export class LogicError extends BaseError {}
 
-export class SubFunAssertionError extends SubFunError {}
+export class AssertionError extends BaseError {}
 
 export function unreachable(_x: never): never {
-  throw new SubFunLogicError("unreachable");
+  throw new LogicError("unreachable");
 }

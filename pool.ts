@@ -1,6 +1,7 @@
 import { Provider } from "./provider.ts";
 
-export class Pool<T, Args extends readonly unknown[]> implements Provider<T, Args> {
+export class Pool<T, Args extends readonly unknown[]>
+  implements Provider<T, Args> {
   #create: (...args: Args) => T;
   #cleanup: (x: T) => void;
   #reportError: (e: unknown) => void;

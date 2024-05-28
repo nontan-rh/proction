@@ -1,4 +1,4 @@
-import { SubFunLogicError } from "./error.ts";
+import { LogicError } from "./error.ts";
 
 interface Releaser<T> {
   release(x: T): void;
@@ -41,7 +41,7 @@ export class Provided<T> {
   get body(): T {
     const body = this.#body;
     if (body == null) {
-      throw new SubFunLogicError("Provided is already released");
+      throw new LogicError("Provided is already released");
     }
     return body;
   }
