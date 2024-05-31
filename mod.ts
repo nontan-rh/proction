@@ -28,14 +28,12 @@ type UntypedHandle = Handle<unknown>;
 export function getPlan(
   ...handles: (
     | UntypedHandle
-    | Record<ObjectKey, UntypedHandle>
     | readonly UntypedHandle[]
   )[]
 ): Plan {
   function isHandle(
     x:
       | UntypedHandle
-      | Record<ObjectKey, UntypedHandle>
       | readonly UntypedHandle[],
   ): x is UntypedHandle {
     return parentPlanKey in x;
@@ -51,8 +49,8 @@ export function getPlan(
         throw new BaseError("Plan inconsitent");
       }
     } else {
-      for (const k in t) {
-        const p = t[k][parentPlanKey];
+      for (const h of t) {
+        const p = h[parentPlanKey];
         if (plan == null) {
           plan = p;
         } else if (p !== plan) {
