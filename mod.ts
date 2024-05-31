@@ -208,9 +208,28 @@ interface Invocation {
   readonly run: () => void;
 }
 
+const reportErrorKey = Symbol("reportError");
+
 export class Context {
+  [reportErrorKey]: (e: unknown) => void;
+
+  constructor(options?: ContextOptions) {
+    const fixedOptions = { ...defaultContextOptions, ...options };
+
+    const reportError = fixedOptions.reportError;
+    this[reportErrorKey] = (e) => {
+      if (reportError != null) {
+        try {
+          reportError(e);
+        } catch {
+          // no recovery
+        }
+      }
+    };
+  }
+
   run(planFn: (p: PlanFnParams) => void, options?: RunOptions) {
-    const plan = new Plan();
+    const plan = new Plan(this);
     const runParams: PlanFnParams = {
       input: (value) => input(plan, value),
       output: (value) => output(plan, value),
@@ -220,6 +239,12 @@ export class Context {
   }
 }
 
+type ContextOptions = {
+  reportError?: (e: unknown) => void;
+};
+
+const defaultContextOptions: ContextOptions = {};
+
 type PlanFnParams = {
   input<T extends object>(value: T): Handle<T>;
   output<T extends object>(value: T): Handle<T>;
@@ -228,6 +253,7 @@ type PlanFnParams = {
 const undefinedFn = () => {};
 
 class Plan {
+  context: Context;
   state: PlanState;
   inputCache: WeakMap<object, UntypedHandle>;
   outputCache: WeakMap<object, UntypedHandle>;
@@ -244,7 +270,8 @@ class Plan {
   generateInvocationID = idGenerator((value) => value as InvocationID);
   invocations = new Map<InvocationID, Invocation>();
 
-  constructor() {
+  constructor(context: Context) {
+    this.context = context;
     this.state = "initial";
     this.inputCache = new WeakMap();
     this.outputCache = new WeakMap();
@@ -323,7 +350,7 @@ function intermediate<T>(
       }
       x.value.release();
       x.clear();
-    }, console.error),
+    }, plan.context[reportErrorKey]),
     allocator,
   });
 
@@ -331,7 +358,7 @@ function intermediate<T>(
 }
 
 export type RunOptions = {
-  assertNoLeak: boolean;
+  assertNoLeak?: boolean;
 };
 
 const defaultRunOptions: RunOptions = {
@@ -340,7 +367,7 @@ const defaultRunOptions: RunOptions = {
 
 function run(
   plan: Plan,
-  options?: Partial<RunOptions>,
+  options?: RunOptions,
 ): void {
   const fixedOptions = { ...defaultRunOptions, ...options };
 

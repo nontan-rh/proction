@@ -55,7 +55,7 @@ Deno.test(function calc() {
 
   const resultBody = new Box<number>();
 
-  new Context().run(({ input, output }) => {
+  new Context({ reportError: console.error }).run(({ input, output }) => {
     const result = output(resultBody);
     const result1 = pureAdd(
       input(Box.withValue(1)),
@@ -77,7 +77,9 @@ Deno.test(function calc() {
 });
 
 Deno.test(function empty() {
-  new Context().run(() => {}, { assertNoLeak: true });
+  new Context({ reportError: console.error }).run(() => {}, {
+    assertNoLeak: true,
+  });
 });
 
 Deno.test(async function twoOutputs(t) {
@@ -123,7 +125,7 @@ Deno.test(async function twoOutputs(t) {
     const divBody = new Box<number>();
     const modBody = new Box<number>();
 
-    new Context().run(({ input, output }) => {
+    new Context({ reportError: console.error }).run(({ input, output }) => {
       const div = output(divBody);
       const mod = output(modBody);
 
@@ -138,7 +140,7 @@ Deno.test(async function twoOutputs(t) {
   await t.step(function modOutputIsIntermediate() {
     const resultBody = new Box<number>();
 
-    new Context().run(({ input, output }) => {
+    new Context({ reportError: console.error }).run(({ input, output }) => {
       const result = output(resultBody);
       const [, mod] = pureDivmod(
         input(Box.withValue(42)),
@@ -190,7 +192,7 @@ Deno.test(async function outputUsage(t) {
   );
 
   await t.step(function noOutputsAreUsed() {
-    new Context().run(({ input }) => {
+    new Context({ reportError: console.error }).run(({ input }) => {
       const input1 = input(Box.withValue(42));
       const input2 = input(Box.withValue(5));
 
@@ -205,7 +207,7 @@ Deno.test(async function outputUsage(t) {
     const result1Body = new Box<number>();
     const result2Body = new Box<number>();
 
-    new Context().run(({ input, output }) => {
+    new Context({ reportError: console.error }).run(({ input, output }) => {
       const result1 = output(result1Body);
       const result2 = output(result2Body);
 
@@ -226,7 +228,7 @@ Deno.test(async function outputUsage(t) {
     const sumBody = new Box<number>();
     const resultBody = new Box<number>();
 
-    new Context().run(({ input, output }) => {
+    new Context({ reportError: console.error }).run(({ input, output }) => {
       const sum = output(sumBody);
       const result = output(resultBody);
 
@@ -276,7 +278,7 @@ Deno.test(function calcIO() {
   input2RW.setValue(2);
   const [result1R, result1W] = pipeBox<number>();
   const result2RW = pipeBoxRW<number>();
-  new Context().run(({ input, output }) => {
+  new Context({ reportError: console.error }).run(({ input, output }) => {
     const result1Handle = output(result1W);
     const result2Handle = output(result2RW);
 
