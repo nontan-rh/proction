@@ -133,7 +133,7 @@ export function multipleOutputAction<
         const preparedOutputs = prepareMultipleOutput(plan, outputSet);
         f(preparedOutputs, ...restoredInputs);
         decRefArray(plan, inputArgs);
-        decRefSet(plan, outputSet);
+        decRefArray(plan, outputSet);
       },
     };
     plan.invocations.set(invocation.id, invocation);
@@ -529,16 +529,7 @@ function decRefArray(plan: Plan, handleSet: readonly UntypedHandle[]): void {
   }
 }
 
-function decRefSet<T extends readonly unknown[]>(
-  plan: Plan,
-  handleSet: HandleSet<T>,
-): void {
-  for (const handle of handleSet) {
-    decRef(plan, handle);
-  }
-}
-
-function decRef<T>(plan: Plan, handle: Handle<T>): void {
+function decRef(plan: Plan, handle: UntypedHandle): void {
   const dataSlot = plan.dataSlots.get(handle[handleIdKey]);
   if (dataSlot == null) {
     throw new LogicError(
