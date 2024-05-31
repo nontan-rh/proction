@@ -38,16 +38,16 @@ Deno.test(function calc() {
 
   const add = singleOutputAction(
     BoxedNumber,
-    (provider, _l, _r) => provider.acquire(),
     (result, l: Box<number>, r: Box<number>) =>
       result.value = l.value + r.value,
+    (provider, _l, _r) => provider.acquire(),
   );
   const pureAdd = singleOutputPurify(add);
   const mul = singleOutputAction(
     BoxedNumber,
-    (provider, _l, _r) => provider.acquire(),
     (result, l: Box<number>, r: Box<number>) =>
       result.value = l.value * r.value,
+    (provider, _l, _r) => provider.acquire(),
   );
   const pureMul = singleOutputPurify(mul);
 
@@ -100,21 +100,21 @@ Deno.test(async function twoOutputs(t) {
 
   const divmod = multipleOutputAction(
     [BoxedNumber, BoxedNumber],
-    [
-      (provider, _l, _r) => provider.acquire(),
-      (provider, _l, _r) => provider.acquire(),
-    ],
     ([div, mod], l: Box<number>, r: Box<number>) => {
       div.value = Math.floor(l.value / r.value);
       mod.value = l.value % r.value;
     },
+    [
+      (provider, _l, _r) => provider.acquire(),
+      (provider, _l, _r) => provider.acquire(),
+    ],
   );
   const pureDivmod = multipleOutputPurify(divmod);
   const add = singleOutputAction(
     BoxedNumber,
-    (provider, _l, _r) => provider.acquire(),
     (result, l: Box<number>, r: Box<number>) =>
       result.value = l.value + r.value,
+    (provider, _l, _r) => provider.acquire(),
   );
 
   await t.step(function bothOutputsAreGlobal() {
@@ -172,16 +172,16 @@ Deno.test(async function outputUsage(t) {
 
   const add = singleOutputAction(
     BoxedNumber,
-    (provider, _l, _r) => provider.acquire(),
     (result, l: Box<number>, r: Box<number>) =>
       result.value = l.value + r.value,
+    (provider, _l, _r) => provider.acquire(),
   );
   const pureAdd = singleOutputPurify(add);
   const mul = singleOutputAction(
     BoxedNumber,
-    (provider, _l, _r) => provider.acquire(),
     (result, l: Box<number>, r: Box<number>) =>
       result.value = l.value * r.value,
+    (provider, _l, _r) => provider.acquire(),
   );
   const pureMul = singleOutputPurify(mul);
 
@@ -256,16 +256,16 @@ Deno.test(function calcIO() {
 
   const add = singleOutputAction(
     BoxedNumber,
-    (provider, _l, _r) => provider.acquire(),
     (result, l: IPipeBoxR<number>, r: IPipeBoxR<number>) =>
       result.setValue(l.getValue() + r.getValue()),
+    (provider, _l, _r) => provider.acquire(),
   );
   const pureAdd = singleOutputPurify(add);
   const mul = singleOutputAction(
     BoxedNumber,
-    (provider, _l, _r) => provider.acquire(),
     (result, l: IPipeBoxR<number>, r: IPipeBoxR<number>) =>
       result.setValue(l.getValue() * r.getValue()),
+    (provider, _l, _r) => provider.acquire(),
   );
   const pureMul = singleOutputPurify(mul);
 

@@ -124,11 +124,11 @@ export function singleOutputAction<
   O extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
 >(
   o: O,
+  f: (output: OutputType<O>, ...inputArgs: I) => void,
   allocator: (
     provider: ProviderType<O>,
     ...inputArgs: I
   ) => Provided<ProvidedType<O>>,
-  f: (output: OutputType<O>, ...inputArgs: I) => void,
 ):
   & ((
     output: Handle<OutputType<O>>, // expanded for readability of inferred type
@@ -179,13 +179,13 @@ export function multipleOutputAction<
   O extends ParamSpecs,
 >(
   o: O,
+  f: (outputSet: OutputSet<O>, ...inputArgs: I) => void,
   allocators: {
     [key in keyof OutputSet<O>]: (
       provider: ProviderType<O[key]>,
       ...inputArgs: I
     ) => Provided<ProvidedType<O[key]>>;
   },
-  f: (outputSet: OutputSet<O>, ...inputArgs: I) => void,
 ):
   & ((
     outputSet: { [key in keyof O]: Handle<OutputType<O[key]>> }, // expanded for readability of inferred type
