@@ -1,8 +1,9 @@
 import { AssertionError, BaseError, LogicError, unreachable } from "./error.ts";
 import { Brand } from "./brand.ts";
-import { Provided, Provider, ProviderWrap } from "./provider.ts";
+import { Provided } from "./provider.ts";
 import { Box } from "./box.ts";
 import { Rc } from "./rc.ts";
+export { ProviderWrap } from "./provider.ts";
 
 function idGenerator<T>(transform: (x: number) => T): () => T {
   let counter = 0;
@@ -73,73 +74,17 @@ type BodySet<T> = {
 };
 type BodyType<T> = T extends Handle<infer X> ? X : never;
 
-const outputModeSingle = "single" as const;
-const outputModeMultiple = "multiple" as const;
-
-type SingleOutputAction<
-  I extends readonly unknown[],
-  O extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
-> = {
-  outputMode: typeof outputModeSingle;
-  f(output: OutputType<O>, ...inputArgs: I): void; // bivariant
-  o: O;
-  allocator(
-    provider: ProviderType<O>,
-    ...inputArgs: I
-  ): Provided<ProvidedType<O>>; // bivariant
-};
-type MultipleOutputAction<I extends readonly unknown[], O extends ParamSpecs> =
-  {
-    outputMode: typeof outputModeMultiple;
-    f(outputSet: OutputSet<O>, ...inputArgs: I): void; // bivariant
-    o: O;
-    allocators: {
-      [key in keyof OutputSet<O>]: (
-        provider: ProviderType<O[key]>,
-        ...inputArgs: I
-      ) => Provided<ProvidedType<O[key]>>;
-    };
-  };
-
-const actionKey = Symbol("action");
-type SingleOutputActionMeta<
-  I extends readonly unknown[],
-  O extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
-> = {
-  [actionKey]: SingleOutputAction<I, O>;
-};
-type MultipleOutputActionMeta<
-  I extends readonly unknown[],
-  O extends ParamSpecs,
-> = {
-  [actionKey]: MultipleOutputAction<I, O>;
-};
-
 export function singleOutputAction<
   I extends readonly unknown[],
-  O extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
+  O,
 >(
-  o: O,
-  f: (output: OutputType<O>, ...inputArgs: I) => void,
-  allocator: (
-    provider: ProviderType<O>,
-    ...inputArgs: I
-  ) => Provided<ProvidedType<O>>,
-):
-  & ((
-    output: Handle<OutputType<O>>, // expanded for readability of inferred type
-    ...inputArgs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
-  ) => void)
-  & SingleOutputActionMeta<I, O> {
-  const action: SingleOutputAction<I, O> = {
-    outputMode: outputModeSingle,
-    f,
-    o,
-    allocator,
-  };
-
+  f: (output: O, ...inputArgs: I) => void,
+): (
+  output: Handle<O>,
+  ...inputArgs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
+) => void {
   const g = (
-    output: Handle<OutputType<O>>,
+    output: Handle<O>,
     ...inputArgs: HandleSet<I>
   ) => {
     const plan = getPlan(output, ...inputArgs);
@@ -151,13 +96,7 @@ export function singleOutputAction<
       outputSet: [output],
       run: () => {
         const restoredInputs = restoreArgs(plan, inputArgs);
-        const preparedOutputs = prepareOutput(
-          plan,
-          o,
-          output,
-          restoredInputs,
-          allocator,
-        );
+        const preparedOutputs = prepareOutput(plan, output);
         f(preparedOutputs, ...restoredInputs);
         decRefArray(plan, inputArgs);
         decRef(plan, output);
@@ -165,38 +104,21 @@ export function singleOutputAction<
     };
     plan.invocations.set(invocation.id, invocation);
   };
-  g[actionKey] = action;
 
   return g;
 }
 
 export function multipleOutputAction<
   I extends readonly unknown[],
-  O extends ParamSpecs,
+  O extends readonly unknown[],
 >(
-  o: O,
-  f: (outputSet: OutputSet<O>, ...inputArgs: I) => void,
-  allocators: {
-    [key in keyof OutputSet<O>]: (
-      provider: ProviderType<O[key]>,
-      ...inputArgs: I
-    ) => Provided<ProvidedType<O[key]>>;
-  },
-):
-  & ((
-    outputSet: { [key in keyof O]: Handle<OutputType<O[key]>> }, // expanded for readability of inferred type
-    ...inputArgs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
-  ) => void)
-  & MultipleOutputActionMeta<I, O> {
-  const action: MultipleOutputAction<I, O> = {
-    outputMode: outputModeMultiple,
-    f,
-    o,
-    allocators,
-  };
-
+  f: (outputSet: O, ...inputArgs: I) => void,
+): (
+  outputSet: { [key in keyof O]: Handle<O[key]> }, // expanded for readability of inferred type
+  ...inputArgs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
+) => void {
   const g = (
-    outputSet: HandleSet<OutputSet<O>>,
+    outputSet: HandleSet<O>,
     ...inputArgs: HandleSet<I>
   ) => {
     const plan = getPlan(outputSet, ...inputArgs);
@@ -208,13 +130,7 @@ export function multipleOutputAction<
       outputSet,
       run: () => {
         const restoredInputs = restoreArgs(plan, inputArgs);
-        const preparedOutputs = prepareMultipleOutput(
-          plan,
-          o,
-          outputSet,
-          restoredInputs,
-          allocators,
-        );
+        const preparedOutputs = prepareMultipleOutput(plan, outputSet);
         f(preparedOutputs, ...restoredInputs);
         decRefArray(plan, inputArgs);
         decRefSet(plan, outputSet);
@@ -222,28 +138,29 @@ export function multipleOutputAction<
     };
     plan.invocations.set(invocation.id, invocation);
   };
-  g[actionKey] = action;
 
   return g;
 }
 
 export function singleOutputPurify<
   I extends readonly unknown[],
-  O extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
+  O,
+  A extends O,
 >(
-  rawAction:
-    & ((
-      output: Handle<OutputType<O>>,
-      ...inputArgs: HandleSet<I>
-    ) => void)
-    & SingleOutputActionMeta<I, O>,
+  rawAction: (
+    output: Handle<O>,
+    ...inputArgs: HandleSet<I>
+  ) => void,
+  allocator: (...inputArgs: I) => Provided<A>,
 ): (
   ...inputArgs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
-) => Handle<InputType<O>> // expanded for readability of inferred type
-{
-  return (...inputArgs: HandleSet<I>): Handle<InputType<O>> => {
+) => Handle<A> {
+  return (...inputArgs: HandleSet<I>): Handle<A> => {
     const plan = getPlan(...inputArgs);
-    const output = plan.generateHandle() as Handle<OutputType<O>>;
+    const output = intermediate(
+      plan,
+      () => allocator(...restoreArgs(plan, inputArgs)),
+    );
     rawAction(output, ...inputArgs);
     return output;
   };
@@ -251,28 +168,31 @@ export function singleOutputPurify<
 
 export function multipleOutputPurify<
   I extends readonly unknown[],
-  O extends ParamSpecs,
+  O extends readonly unknown[],
+  A extends O,
 >(
-  rawAction:
-    & ((
-      outputSet: HandleSet<OutputSet<O>>,
-      ...inputArgs: HandleSet<I>
-    ) => void)
-    & MultipleOutputActionMeta<I, O>,
+  rawAction: (
+    outputSet: HandleSet<O>,
+    ...inputArgs: HandleSet<I>
+  ) => void,
+  allocators: { [key in keyof O]: (...inputArgs: I) => Provided<A[key]> },
 ): (
   ...inputArgs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
-) => { [key in keyof O]: Handle<InputType<O[key]>> } // expanded for readability of inferred type
+) => { [key in keyof O]: Handle<A[key]> } // expanded for readability of inferred type
 {
-  const action = rawAction[actionKey];
-  return (...inputArgs: HandleSet<I>): HandleSet<InputSet<O>> => {
+  return (...inputArgs: HandleSet<I>): HandleSet<O> => {
     const plan = getPlan(...inputArgs);
 
     const partialOutputSet = [];
-    for (let i = 0; i < action.o.length; i++) {
-      const handle = plan.generateHandle();
+    for (let i = 0; i < allocators.length; i++) {
+      const allocator = allocators[i];
+      const handle = intermediate(
+        plan,
+        () => allocator(...restoreArgs(plan, inputArgs)),
+      );
       partialOutputSet.push(handle);
     }
-    const outputSet = partialOutputSet as HandleSet<OutputSet<O>>;
+    const outputSet = partialOutputSet as HandleSet<O>;
 
     rawAction(outputSet, ...inputArgs);
 
@@ -340,55 +260,10 @@ type DataSlot =
 type SourceSlot = { type: "source"; body: unknown };
 type IntermediateSlot = {
   type: "intermediate";
+  allocator: () => Provided<unknown>;
   body: Rc<Box<Provided<unknown>>>;
 };
 type SinkSlot = { type: "sink"; body: unknown };
-
-export type ParamSpecs = readonly TypeSpec<
-  unknown,
-  readonly unknown[],
-  unknown,
-  unknown
->[];
-
-const inputPhantomTypeKey = Symbol("inputType");
-const outputPhantomTypeKey = Symbol("outputType");
-export type TypeSpec<T extends I & O, Args extends readonly unknown[], I, O> = {
-  provider: ProviderWrap<T, Args>;
-  [inputPhantomTypeKey]: I;
-  [outputPhantomTypeKey]: O;
-};
-
-type ProviderType<
-  S extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
-> = S["provider"];
-type ProvidedType<
-  S extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
-> = S["provider"] extends ProviderWrap<infer X, infer _> ? X : never;
-type InputType<
-  S extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
-> = S[typeof inputPhantomTypeKey];
-type OutputType<
-  S extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
-> = S[typeof outputPhantomTypeKey];
-
-type InputSet<S extends ParamSpecs> = {
-  [key in keyof S]: InputType<S[key]>;
-};
-type OutputSet<S extends ParamSpecs> = {
-  [key in keyof S]: OutputType<S[key]>;
-};
-
-export function typeSpec<
-  T extends I & O,
-  Args extends readonly unknown[],
-  I = T,
-  O = T,
->(
-  provider: Provider<T, Args>,
-): TypeSpec<T, Args, I, O> {
-  return { provider: new ProviderWrap(provider) } as TypeSpec<T, Args, I, O>;
-}
 
 function input<T extends object>(plan: Plan, value: T): Handle<T> {
   const cached = plan.inputCache.get(value);
@@ -430,6 +305,27 @@ function output<T extends object>(plan: Plan, value: T): Handle<T> {
     body: value,
   });
   plan.outputCache.set(value, handle);
+
+  return handle as Handle<T>;
+}
+
+function intermediate<T>(
+  plan: Plan,
+  allocator: () => Provided<T>,
+): Handle<T> {
+  const handle = plan.generateHandle();
+
+  plan.dataSlots.set(handle[handleIdKey], {
+    type: "intermediate",
+    body: new Rc(new Box(), (x) => {
+      if (!x.isSet) {
+        return;
+      }
+      x.value.release();
+      x.clear();
+    }, console.error),
+    allocator,
+  });
 
   return handle as Handle<T>;
 }
@@ -527,7 +423,6 @@ function prepareInvocations(
         case "source":
           return;
         case "intermediate":
-          throw new LogicError(`unexpected data slot type: ${type}`);
         case "sink":
           break;
         default:
@@ -547,7 +442,10 @@ function prepareInvocations(
 
   for (const handleId of plan.dataSlots.keys()) {
     const dataSlot = plan.dataSlots.get(handleId);
-    if (dataSlot == null || dataSlot.type !== "sink") {
+    if (
+      dataSlot == null ||
+      (dataSlot.type !== "sink" && dataSlot.type !== "intermediate")
+    ) {
       continue;
     }
     visitHandle(handleId);
@@ -583,49 +481,6 @@ function prepareDataSlots(
           return unreachable(type);
       }
     }
-
-    // create intermediate outputs if needed
-    prepareMultipleIntermediateOutput(plan, invocation.outputSet);
-  }
-}
-
-function prepareIntermediateOutput(
-  plan: Plan,
-  output: UntypedHandle,
-) {
-  const dataSlot = plan.dataSlots.get(output[handleIdKey]);
-
-  if (dataSlot == null) {
-    plan.dataSlots.set(output[handleIdKey], {
-      type: "intermediate",
-      body: new Rc(new Box(), (x) => {
-        if (!x.isSet) {
-          return;
-        }
-        x.value.release();
-      }, console.error),
-    });
-  } else {
-    const type = dataSlot.type;
-    switch (type) {
-      case "source":
-        throw new LogicError(`unexpected data slot type: ${type}`);
-      case "intermediate":
-        throw new LogicError(`unexpected data slot type: ${type}`);
-      case "sink":
-        break;
-      default:
-        return unreachable(type);
-    }
-  }
-}
-
-function prepareMultipleIntermediateOutput<T extends ParamSpecs>(
-  plan: Plan,
-  handleSet: HandleSet<OutputSet<T>>,
-) {
-  for (const output of handleSet) {
-    prepareIntermediateOutput(plan, output);
   }
 }
 
@@ -705,19 +560,10 @@ function decRef<T>(plan: Plan, handle: Handle<T>): void {
   }
 }
 
-function prepareOutput<
-  T extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
-  I extends readonly unknown[],
->(
+function prepareOutput<T>(
   plan: Plan,
-  typeSpec: T,
-  handle: Handle<OutputType<T>>,
-  inputs: I,
-  allocator: (
-    provider: ProviderType<T>,
-    ...inputArgs: I
-  ) => Provided<ProvidedType<T>>,
-): OutputType<T> {
+  handle: Handle<T>,
+): T {
   const dataSlot = plan.dataSlots.get(handle[handleIdKey]);
   if (dataSlot == null) {
     throw new LogicError("data slot not found");
@@ -728,16 +574,19 @@ function prepareOutput<
     case "source":
       throw new LogicError(`unexpected data slot type: ${type}`);
     case "intermediate": {
+      if (dataSlot.body.isFreed) {
+        throw new LogicError("data slot is already freed");
+      }
       if (dataSlot.body.body.isSet) {
         throw new LogicError("data slot is already set");
       }
-      const body = allocator(typeSpec.provider, ...inputs);
+      const body = dataSlot.allocator();
       dataSlot.body.body.value = body;
-      return body.body;
+      return body.body as T;
     }
     case "sink": {
       const body = dataSlot.body;
-      return body as OutputType<T>;
+      return body as T;
     }
     default:
       return unreachable(type);
@@ -745,31 +594,19 @@ function prepareOutput<
 }
 
 function prepareMultipleOutput<
-  T extends ParamSpecs,
-  I extends readonly unknown[],
+  T extends readonly UntypedHandle[],
 >(
   plan: Plan,
-  paramSpecSet: T,
-  handleSet: HandleSet<OutputSet<T>>,
-  inputs: I,
-  allocators: {
-    [key in keyof OutputSet<T>]: (
-      provider: ProviderType<T[key]>,
-      ...inputArgs: I
-    ) => Provided<ProvidedType<T[key]>>;
-  },
-): OutputSet<T> {
+  handleSet: T,
+): BodySet<T> {
   const partialPrepared = [];
   for (let i = 0; i < handleSet.length; i++) {
     partialPrepared.push(prepareOutput(
       plan,
-      paramSpecSet[i],
       handleSet[i],
-      inputs,
-      allocators[i],
     ));
   }
-  return partialPrepared as OutputSet<T>;
+  return partialPrepared as BodySet<T>;
 }
 
 function assertNoLeak(plan: Plan) {
