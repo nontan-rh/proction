@@ -1,4 +1,9 @@
-import { AssertionError, BaseError, LogicError, unreachable } from "./error.ts";
+import {
+  AssertionError,
+  LogicError,
+  PreconditionError,
+  unreachable,
+} from "./error.ts";
 import { Brand } from "./brand.ts";
 import { Provided } from "./provider.ts";
 import { Box } from "./box.ts";
@@ -45,7 +50,7 @@ export function getPlan(
       if (plan == null) {
         plan = p;
       } else if (p !== plan) {
-        throw new BaseError("Plan inconsitent");
+        throw new PreconditionError("Plan inconsitent");
       }
     } else {
       for (const h of t) {
@@ -53,14 +58,14 @@ export function getPlan(
         if (plan == null) {
           plan = p;
         } else if (p !== plan) {
-          throw new BaseError("Plan inconsitent");
+          throw new PreconditionError("Plan inconsitent");
         }
       }
     }
   }
 
   if (plan == null) {
-    throw new BaseError("Failed to detect plan");
+    throw new PreconditionError("Failed to detect plan");
   }
 
   return plan;
@@ -300,7 +305,7 @@ function source<T extends object>(plan: Plan, value: T): Handle<T> {
 
   // validation
   if (plan.outputCache.has(value)) {
-    throw new BaseError("the value is already specified as output");
+    throw new PreconditionError("the value is already specified as output");
   }
 
   const handle = plan.generateHandle();
@@ -322,7 +327,7 @@ function sink<T extends object>(plan: Plan, value: T): Handle<T> {
 
   // validation
   if (plan.inputCache.has(value)) {
-    throw new BaseError("the value is already specified as input");
+    throw new PreconditionError("the value is already specified as input");
   }
 
   const handle = plan.generateHandle();
@@ -372,7 +377,7 @@ function run(
   const fixedOptions = { ...defaultRunOptions, ...options };
 
   if (plan.state !== "initial") {
-    throw new BaseError(
+    throw new PreconditionError(
       `invalid state precondition for run(): ${plan.state}`,
     );
   }
