@@ -69,12 +69,13 @@ export function getPlan(
   return plan;
 }
 
-type UntypedHandleSet<T> = {
-  [key in keyof T]: UntypedHandle;
-};
 type HandleSet<T> = {
   [key in keyof T]: Handle<T[key]>;
 };
+type BodySet<T> = {
+  [key in keyof T]: BodyType<T[key]>;
+};
+type BodyType<T> = T extends Handle<infer X> ? X : never;
 
 const outputModeSingle = "single" as const;
 const outputModeMultiple = "multiple" as const;
@@ -103,25 +104,6 @@ type MultipleOutputAction<I extends readonly unknown[], O extends ParamSpecs> =
       ) => Provided<ProvidedType<O[key]>>;
     };
   };
-type SingleOutputUntypedAction = {
-  outputMode: typeof outputModeSingle;
-  f(output: unknown, ...inputArgs: readonly unknown[]): void; // bivariant
-  o: TypeSpec<unknown, readonly unknown[], unknown, unknown>;
-  allocator(
-    provider: ProviderWrap<unknown, readonly unknown[]>,
-    ...inputArgs: readonly unknown[]
-  ): Provided<unknown>; // bivariant
-};
-type MultipleOutputUntypedAction = {
-  outputMode: typeof outputModeMultiple;
-  f(outputSet: unknown, ...inputArgs: readonly unknown[]): void; // bivariant
-  o: ParamSpecs;
-  allocators: ((
-    provider: ProviderWrap<unknown, readonly unknown[]>,
-    ...inputArgs: readonly unknown[]
-  ) => Provided<unknown>)[];
-};
-type UntypedAction = SingleOutputUntypedAction | MultipleOutputUntypedAction;
 
 const actionKey = Symbol("action");
 type SingleOutputActionMeta<
@@ -169,10 +151,21 @@ export function singleOutputAction<
     const id = plan.generateInvocationID();
     const invocation: Invocation = {
       id,
-      outputMode: outputModeSingle,
-      action,
       inputArgs,
-      output,
+      outputSet: [output],
+      run: () => {
+        const restoredInputs = restoreArgs(plan, inputArgs);
+        const preparedOutputs = prepareOutput(
+          plan,
+          o,
+          output,
+          restoredInputs,
+          allocator,
+        );
+        f(preparedOutputs, ...restoredInputs);
+        decRefArray(plan, inputArgs);
+        decRef(plan, output);
+      },
     };
     plan.invocations.set(invocation.id, invocation);
   };
@@ -215,10 +208,21 @@ export function multipleOutputAction<
     const id = plan.generateInvocationID();
     const invocation: Invocation = {
       id,
-      outputMode: outputModeMultiple,
-      action: action as unknown as MultipleOutputUntypedAction,
       inputArgs,
       outputSet,
+      run: () => {
+        const restoredInputs = restoreArgs(plan, inputArgs);
+        const preparedOutputs = prepareMultipleOutput(
+          plan,
+          o,
+          outputSet,
+          restoredInputs,
+          allocators,
+        );
+        f(preparedOutputs, ...restoredInputs);
+        decRefArray(plan, inputArgs);
+        decRefSet(plan, outputSet);
+      },
     };
     plan.invocations.set(invocation.id, invocation);
   };
@@ -281,21 +285,12 @@ export function multipleOutputPurify<
 }
 
 type InvocationID = Brand<number, "invocationID">;
-type Invocation = SingleOutputInvocation | MultipleOutputInvocation;
-type SingleOutputInvocation = {
-  id: InvocationID;
-  outputMode: typeof outputModeSingle;
-  action: SingleOutputUntypedAction;
-  inputArgs: readonly UntypedHandle[];
-  output: UntypedHandle;
-};
-type MultipleOutputInvocation = {
-  id: InvocationID;
-  outputMode: typeof outputModeMultiple;
-  action: MultipleOutputUntypedAction;
-  inputArgs: readonly UntypedHandle[];
-  outputSet: readonly UntypedHandle[];
-};
+interface Invocation {
+  readonly id: InvocationID;
+  readonly inputArgs: readonly UntypedHandle[];
+  readonly outputSet: readonly UntypedHandle[];
+  readonly run: () => void;
+}
 
 export class Context {
   run(planFn: (p: PlanFnParams) => void, options?: RunOptions) {
@@ -374,9 +369,6 @@ type ProviderType<
 type ProvidedType<
   S extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
 > = S["provider"] extends ProviderWrap<infer X, infer _> ? X : never;
-type ArgsType<
-  S extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
-> = S["provider"] extends ProviderWrap<infer _, infer X> ? X : never;
 type InputType<
   S extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
 > = S[typeof inputPhantomTypeKey];
@@ -475,41 +467,7 @@ function run(
     plan.state = "running";
 
     for (const invocation of invocations) {
-      const outputMode = invocation.outputMode;
-      switch (outputMode) {
-        case "single": {
-          const action = invocation.action;
-          const restoredInputs = restoreArgs(plan, invocation.inputArgs);
-          const preparedOutputs = prepareOutput(
-            plan,
-            action.o,
-            invocation.output,
-            restoredInputs,
-            action.allocator,
-          );
-          action.f(preparedOutputs, ...restoredInputs);
-          decRefArray(plan, invocation.inputArgs);
-          decRef(plan, invocation.output);
-          break;
-        }
-        case "multiple": {
-          const action = invocation.action;
-          const restoredInputs = restoreArgs(plan, invocation.inputArgs);
-          const preparedOutputs = prepareMultipleOutput(
-            plan,
-            action.o,
-            invocation.outputSet,
-            restoredInputs,
-            action.allocators,
-          );
-          action.f(preparedOutputs, ...restoredInputs);
-          decRefArray(plan, invocation.inputArgs);
-          decRefSet(plan, invocation.outputSet);
-          break;
-        }
-        default:
-          return unreachable(outputMode);
-      }
+      invocation.run();
     }
 
     if (fixedOptions.assertNoLeak) {
@@ -533,28 +491,13 @@ function prepareInvocations(
 
   const outputToInvocation = new Map<HandleId, Invocation>();
   for (const invocation of plan.invocations.values()) {
-    const outputMode = invocation.outputMode;
-    switch (outputMode) {
-      case "single": {
-        const output = invocation.output;
-        if (outputToInvocation.has(output[handleIdKey])) {
-          throw new LogicError("the output have two parent invocations");
-        }
-        outputToInvocation.set(output[handleIdKey], invocation);
-        break;
+    for (const output of invocation.outputSet) {
+      if (outputToInvocation.has(output[handleIdKey])) {
+        throw new LogicError(
+          "the output have two parent invocations",
+        );
       }
-      case "multiple":
-        for (const output of invocation.outputSet) {
-          if (outputToInvocation.has(output[handleIdKey])) {
-            throw new LogicError(
-              "the output have two parent invocations",
-            );
-          }
-          outputToInvocation.set(output[handleIdKey], invocation);
-        }
-        break;
-      default:
-        unreachable(outputMode);
+      outputToInvocation.set(output[handleIdKey], invocation);
     }
   }
 
@@ -646,22 +589,7 @@ function prepareDataSlots(
     }
 
     // create intermediate outputs if needed
-    const outputMode = invocation.outputMode;
-    switch (outputMode) {
-      case "single": {
-        prepareIntermediateOutput(plan, invocation.output);
-        break;
-      }
-      case "multiple": {
-        prepareMultipleIntermediateOutput(
-          plan,
-          invocation.outputSet,
-        );
-        break;
-      }
-      default:
-        return unreachable(outputMode);
-    }
+    prepareMultipleIntermediateOutput(plan, invocation.outputSet);
   }
 }
 
@@ -705,15 +633,15 @@ function prepareMultipleIntermediateOutput<T extends ParamSpecs>(
   }
 }
 
-function restoreArgs(
+function restoreArgs<T extends readonly UntypedHandle[]>(
   plan: Plan,
-  argHandles: readonly UntypedHandle[],
-): unknown[] {
-  const restored: unknown[] = [];
+  argHandles: T,
+): BodySet<T> {
+  const restored = [];
   for (const argHandle of argHandles) {
     restored.push(restore(plan, argHandle));
   }
-  return restored;
+  return restored as BodySet<T>;
 }
 
 function restore<T>(plan: Plan, handle: Handle<T>): T {
