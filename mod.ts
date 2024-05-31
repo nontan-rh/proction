@@ -94,7 +94,7 @@ export function singleOutputAction<
   ) => {
     const plan = getPlan(output, ...inputArgs);
 
-    const id = plan.generateInvocationID();
+    const id = plan[internalPlanKey].generateInvocationID();
     const invocation: Invocation = {
       id,
       inputArgs,
@@ -107,7 +107,7 @@ export function singleOutputAction<
         decRef(plan, output);
       },
     };
-    plan.invocations.set(invocation.id, invocation);
+    plan[internalPlanKey].invocations.set(invocation.id, invocation);
   };
 
   return g;
@@ -128,7 +128,7 @@ export function multipleOutputAction<
   ) => {
     const plan = getPlan(outputSet, ...inputArgs);
 
-    const id = plan.generateInvocationID();
+    const id = plan[internalPlanKey].generateInvocationID();
     const invocation: Invocation = {
       id,
       inputArgs,
@@ -141,7 +141,7 @@ export function multipleOutputAction<
         decRefArray(plan, outputSet);
       },
     };
-    plan.invocations.set(invocation.id, invocation);
+    plan[internalPlanKey].invocations.set(invocation.id, invocation);
   };
 
   return g;
@@ -240,7 +240,11 @@ export class Context {
   }
 
   run(planFn: (p: PlanFnParams) => void, options?: RunOptions) {
-    const plan = new Plan(this);
+    const plan: Plan = {
+      context: this,
+      [internalPlanKey]: new InternalPlan(this),
+    };
+    plan[internalPlanKey].plan = plan;
     const runParams: PlanFnParams = {
       source: (value) => source(plan, value),
       sink: (value) => sink(plan, value),
@@ -267,8 +271,15 @@ type PlanFnParams = {
 
 const undefinedFn = () => {};
 
-class Plan {
+const internalPlanKey = Symbol("internalPlan");
+type Plan = {
+  readonly context: Context;
+  [internalPlanKey]: InternalPlan;
+};
+
+class InternalPlan {
   context: Context;
+  plan: Plan;
   state: PlanState;
   inputCache: WeakMap<object, UntypedHandle>;
   outputCache: WeakMap<object, UntypedHandle>;
@@ -276,7 +287,7 @@ class Plan {
   generateHandle: () => UntypedHandle = idGenerator((
     value,
   ) => ({
-    [parentPlanKey]: this,
+    [parentPlanKey]: this.plan,
     [handleIdKey]: value as HandleId,
     [phantomDataKey]: undefinedFn,
   }));
@@ -287,6 +298,7 @@ class Plan {
 
   constructor(context: Context) {
     this.context = context;
+    this.plan = undefined!;
     this.state = "initial";
     this.inputCache = new WeakMap();
     this.outputCache = new WeakMap();
@@ -308,45 +320,45 @@ type IntermediateSlot = {
 type SinkSlot = { type: "sink"; body: unknown };
 
 function source<T extends object>(plan: Plan, value: T): Handle<T> {
-  const cached = plan.inputCache.get(value);
+  const cached = plan[internalPlanKey].inputCache.get(value);
   if (cached) {
     return cached as Handle<T>;
   }
 
   // validation
-  if (plan.outputCache.has(value)) {
+  if (plan[internalPlanKey].outputCache.has(value)) {
     throw new PreconditionError("the value is already specified as output");
   }
 
-  const handle = plan.generateHandle();
+  const handle = plan[internalPlanKey].generateHandle();
 
-  plan.dataSlots.set(handle[handleIdKey], {
+  plan[internalPlanKey].dataSlots.set(handle[handleIdKey], {
     type: "source",
     body: value,
   });
-  plan.inputCache.set(value, handle);
+  plan[internalPlanKey].inputCache.set(value, handle);
 
   return handle as Handle<T>;
 }
 
 function sink<T extends object>(plan: Plan, value: T): Handle<T> {
-  const cached = plan.outputCache.get(value);
+  const cached = plan[internalPlanKey].outputCache.get(value);
   if (cached) {
     return cached as Handle<T>;
   }
 
   // validation
-  if (plan.inputCache.has(value)) {
+  if (plan[internalPlanKey].inputCache.has(value)) {
     throw new PreconditionError("the value is already specified as input");
   }
 
-  const handle = plan.generateHandle();
+  const handle = plan[internalPlanKey].generateHandle();
 
-  plan.dataSlots.set(handle[handleIdKey], {
+  plan[internalPlanKey].dataSlots.set(handle[handleIdKey], {
     type: "sink",
     body: value,
   });
-  plan.outputCache.set(value, handle);
+  plan[internalPlanKey].outputCache.set(value, handle);
 
   return handle as Handle<T>;
 }
@@ -355,9 +367,9 @@ function intermediate<T>(
   plan: Plan,
   allocator: () => Provided<T>,
 ): Handle<T> {
-  const handle = plan.generateHandle();
+  const handle = plan[internalPlanKey].generateHandle();
 
-  plan.dataSlots.set(handle[handleIdKey], {
+  plan[internalPlanKey].dataSlots.set(handle[handleIdKey], {
     type: "intermediate",
     body: new Rc(new Box(), (x) => {
       if (!x.isSet) {
@@ -383,19 +395,19 @@ function run(
 ): void {
   const _mergedOptions = { ...defaultRunOptions, ...options };
 
-  if (plan.state !== "initial") {
+  if (plan[internalPlanKey].state !== "initial") {
     throw new PreconditionError(
-      `invalid state precondition for run(): ${plan.state}`,
+      `invalid state precondition for run(): ${plan[internalPlanKey].state}`,
     );
   }
 
   try {
-    plan.state = "planning";
+    plan[internalPlanKey].state = "planning";
 
     const invocations = prepareInvocations(plan);
     prepareDataSlots(plan, invocations);
 
-    plan.state = "running";
+    plan[internalPlanKey].state = "running";
 
     for (const invocation of invocations) {
       invocation.run();
@@ -405,10 +417,10 @@ function run(
       assertNoLeak(plan);
     }
 
-    plan.state = "done";
+    plan[internalPlanKey].state = "done";
   } finally {
-    if (plan.state !== "done") {
-      plan.state = "error";
+    if (plan[internalPlanKey].state !== "done") {
+      plan[internalPlanKey].state = "error";
     }
   }
 }
@@ -421,7 +433,7 @@ function prepareInvocations(
   const result: Invocation[] = [];
 
   const outputToInvocation = new Map<HandleId, Invocation>();
-  for (const invocation of plan.invocations.values()) {
+  for (const invocation of plan[internalPlanKey].invocations.values()) {
     for (const output of invocation.outputSet) {
       if (outputToInvocation.has(output[handleIdKey])) {
         throw new LogicError(
@@ -455,7 +467,7 @@ function prepareInvocations(
   }
 
   function visitHandle(handleId: HandleId): void {
-    const dataSlot = plan.dataSlots.get(handleId);
+    const dataSlot = plan[internalPlanKey].dataSlots.get(handleId);
     if (dataSlot != null) {
       const type = dataSlot.type;
       switch (type) {
@@ -479,8 +491,8 @@ function prepareInvocations(
     visitInvocation(parentInvocation);
   }
 
-  for (const handleId of plan.dataSlots.keys()) {
-    const dataSlot = plan.dataSlots.get(handleId);
+  for (const handleId of plan[internalPlanKey].dataSlots.keys()) {
+    const dataSlot = plan[internalPlanKey].dataSlots.get(handleId);
     if (
       dataSlot == null ||
       (dataSlot.type !== "sink" && dataSlot.type !== "intermediate")
@@ -500,7 +512,9 @@ function prepareDataSlots(
   for (const invocation of invocations) {
     // reserve intermediate inputs
     for (const inputArg of invocation.inputArgs) {
-      const dataSlot = plan.dataSlots.get(inputArg[handleIdKey]);
+      const dataSlot = plan[internalPlanKey].dataSlots.get(
+        inputArg[handleIdKey],
+      );
       if (dataSlot == null) {
         throw new LogicError(
           `dataSlot not found for handle: ${source}`,
@@ -535,7 +549,7 @@ function restoreArgs<T extends readonly UntypedHandle[]>(
 }
 
 function restore<T>(plan: Plan, handle: Handle<T>): T {
-  const dataSlot = plan.dataSlots.get(handle[handleIdKey]);
+  const dataSlot = plan[internalPlanKey].dataSlots.get(handle[handleIdKey]);
   if (dataSlot == null) {
     throw new LogicError(
       `datum not saved for handle: ${handle}`,
@@ -569,7 +583,7 @@ function decRefArray(plan: Plan, handleSet: readonly UntypedHandle[]): void {
 }
 
 function decRef(plan: Plan, handle: UntypedHandle): void {
-  const dataSlot = plan.dataSlots.get(handle[handleIdKey]);
+  const dataSlot = plan[internalPlanKey].dataSlots.get(handle[handleIdKey]);
   if (dataSlot == null) {
     throw new LogicError(
       `data slot not saved for handle: ${handle}`,
@@ -594,7 +608,7 @@ function prepareOutput<T>(
   plan: Plan,
   handle: Handle<T>,
 ): T {
-  const dataSlot = plan.dataSlots.get(handle[handleIdKey]);
+  const dataSlot = plan[internalPlanKey].dataSlots.get(handle[handleIdKey]);
   if (dataSlot == null) {
     throw new LogicError("data slot not found");
   }
@@ -640,7 +654,7 @@ function prepareMultipleOutput<
 }
 
 function assertNoLeak(plan: Plan) {
-  for (const dataSlot of plan.dataSlots.values()) {
+  for (const dataSlot of plan[internalPlanKey].dataSlots.values()) {
     const type = dataSlot.type;
     switch (type) {
       case "source":
