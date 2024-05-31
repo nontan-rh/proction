@@ -80,8 +80,8 @@ type BodySet<T> = {
 type BodyType<T> = T extends Handle<infer X> ? X : never;
 
 export function singleOutputAction<
-  I extends readonly unknown[],
   O,
+  I extends readonly unknown[],
 >(
   f: (output: O, ...inputArgs: I) => void,
 ): (
@@ -114,8 +114,8 @@ export function singleOutputAction<
 }
 
 export function multipleOutputAction<
-  I extends readonly unknown[],
   O extends readonly unknown[],
+  I extends readonly unknown[],
 >(
   f: (outputSet: O, ...inputArgs: I) => void,
 ): (
@@ -148,8 +148,8 @@ export function multipleOutputAction<
 }
 
 export function singleOutputPurify<
-  I extends readonly UntypedHandle[],
   O,
+  I extends readonly UntypedHandle[],
   A extends O,
 >(
   rawAction: (
@@ -172,8 +172,8 @@ export function singleOutputPurify<
 }
 
 export function multipleOutputPurify<
-  I extends readonly UntypedHandle[],
   O extends readonly unknown[],
+  I extends readonly UntypedHandle[],
   A extends O,
 >(
   rawAction: (
