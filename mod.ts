@@ -215,24 +215,28 @@ interface Invocation {
   readonly run: () => void;
 }
 
-const reportErrorKey = Symbol("reportError");
+const contextOptionsKey = Symbol("contextOptions");
 
 export class Context {
-  [reportErrorKey]: (e: unknown) => void;
+  [contextOptionsKey]: ContextOptions;
 
-  constructor(options?: ContextOptions) {
-    const fixedOptions = { ...defaultContextOptions, ...options };
+  constructor(options?: Partial<ContextOptions>) {
+    const mergedOptions = { ...defaultContextOptions, ...options };
 
-    const reportError = fixedOptions.reportError;
-    this[reportErrorKey] = (e) => {
-      if (reportError != null) {
-        try {
-          reportError(e);
-        } catch {
-          // no recovery
+    const reportError = mergedOptions.reportError;
+    if (reportError != null) {
+      mergedOptions.reportError = (e) => {
+        if (reportError != null) {
+          try {
+            reportError(e);
+          } catch {
+            // no recovery
+          }
         }
-      }
-    };
+      };
+    }
+
+    this[contextOptionsKey] = mergedOptions;
   }
 
   run(planFn: (p: PlanFnParams) => void, options?: RunOptions) {
@@ -246,11 +250,15 @@ export class Context {
   }
 }
 
-type ContextOptions = {
-  reportError?: (e: unknown) => void;
+export type ContextOptions = {
+  reportError: (e: unknown) => void;
+  assertNoLeak: boolean;
 };
 
-const defaultContextOptions: ContextOptions = {};
+const defaultContextOptions: ContextOptions = {
+  reportError: () => {},
+  assertNoLeak: false,
+};
 
 type PlanFnParams = {
   source<T extends object>(value: T): Handle<T>;
@@ -357,26 +365,23 @@ function intermediate<T>(
       }
       x.value.release();
       x.clear();
-    }, plan.context[reportErrorKey]),
+    }, plan.context[contextOptionsKey].reportError),
     allocator,
   });
 
   return handle as Handle<T>;
 }
 
-export type RunOptions = {
-  assertNoLeak?: boolean;
-};
+// deno-lint-ignore ban-types
+export type RunOptions = {};
 
-const defaultRunOptions: RunOptions = {
-  assertNoLeak: false,
-};
+const defaultRunOptions: RunOptions = {};
 
 function run(
   plan: Plan,
   options?: RunOptions,
 ): void {
-  const fixedOptions = { ...defaultRunOptions, ...options };
+  const _mergedOptions = { ...defaultRunOptions, ...options };
 
   if (plan.state !== "initial") {
     throw new PreconditionError(
@@ -396,7 +401,7 @@ function run(
       invocation.run();
     }
 
-    if (fixedOptions.assertNoLeak) {
+    if (plan.context[contextOptionsKey].assertNoLeak) {
       assertNoLeak(plan);
     }
 

@@ -6,6 +6,7 @@ import {
 } from "./deps.ts";
 import {
   Context,
+  ContextOptions,
   multipleOutputAction,
   multipleOutputPurify,
   ProviderWrap,
@@ -22,6 +23,11 @@ import {
   pipeBoxR,
   pipeBoxRW,
 } from "./pipebox.ts";
+
+const contextOptions: Partial<ContextOptions> = {
+  reportError: console.error,
+  assertNoLeak: true,
+};
 
 Deno.test(function calc() {
   let errorReported = false;
@@ -49,7 +55,7 @@ Deno.test(function calc() {
 
   const resultBody = new Box<number>();
 
-  new Context({ reportError: console.error }).run(({ source, sink }) => {
+  new Context(contextOptions).run(({ source, sink }) => {
     const result = sink(resultBody);
     const result1 = pureAdd(
       source(Box.withValue(1)),
@@ -61,7 +67,7 @@ Deno.test(function calc() {
     );
     const result3 = pureMul(result1, result2);
     add(result, result3, source(Box.withValue(5)));
-  }, { assertNoLeak: true });
+  });
 
   assertEquals(resultBody.value, 26);
   assertEquals(boxedNumberPool.acquiredCount, 0);
@@ -71,9 +77,7 @@ Deno.test(function calc() {
 });
 
 Deno.test(function empty() {
-  new Context({ reportError: console.error }).run(() => {}, {
-    assertNoLeak: true,
-  });
+  new Context(contextOptions).run(() => {});
 });
 
 Deno.test(async function twoOutputs(t) {
@@ -119,12 +123,12 @@ Deno.test(async function twoOutputs(t) {
     const divBody = new Box<number>();
     const modBody = new Box<number>();
 
-    new Context({ reportError: console.error }).run(({ source, sink }) => {
+    new Context(contextOptions).run(({ source, sink }) => {
       const div = sink(divBody);
       const mod = sink(modBody);
 
       divmod([div, mod], source(Box.withValue(42)), source(Box.withValue(5)));
-    }, { assertNoLeak: true });
+    });
 
     assertEquals(divBody.value, 8);
     assertEquals(modBody.value, 2);
@@ -134,14 +138,14 @@ Deno.test(async function twoOutputs(t) {
   await t.step(function modOutputIsIntermediate() {
     const resultBody = new Box<number>();
 
-    new Context({ reportError: console.error }).run(({ source, sink }) => {
+    new Context(contextOptions).run(({ source, sink }) => {
       const result = sink(resultBody);
       const [, mod] = pureDivmod(
         source(Box.withValue(42)),
         source(Box.withValue(5)),
       );
       add(result, mod, source(Box.withValue(100)));
-    }, { assertNoLeak: true });
+    });
 
     assertEquals(resultBody.value, 102);
     assertPostCondition();
@@ -180,13 +184,13 @@ Deno.test(async function outputUsage(t) {
   const pureMul = singleOutputPurify(mul, () => boxedNumberProvider.acquire());
 
   await t.step(function noOutputsAreUsed() {
-    new Context({ reportError: console.error }).run(({ source }) => {
+    new Context(contextOptions).run(({ source }) => {
       const input1 = source(Box.withValue(42));
       const input2 = source(Box.withValue(5));
 
       pureAdd(input1, input2);
       pureMul(input1, input2);
-    }, { assertNoLeak: true });
+    });
 
     assertPostCondition();
   });
@@ -195,7 +199,7 @@ Deno.test(async function outputUsage(t) {
     const result1Body = new Box<number>();
     const result2Body = new Box<number>();
 
-    new Context({ reportError: console.error }).run(({ source, sink }) => {
+    new Context(contextOptions).run(({ source, sink }) => {
       const result1 = sink(result1Body);
       const result2 = sink(result2Body);
 
@@ -205,7 +209,7 @@ Deno.test(async function outputUsage(t) {
       );
       mul(result1, sum, source(Box.withValue(3)));
       add(result2, sum, source(Box.withValue(4)));
-    }, { assertNoLeak: true });
+    });
 
     assertPostCondition();
     assertEquals(result1Body.value, 132);
@@ -216,13 +220,13 @@ Deno.test(async function outputUsage(t) {
     const sumBody = new Box<number>();
     const resultBody = new Box<number>();
 
-    new Context({ reportError: console.error }).run(({ source, sink }) => {
+    new Context(contextOptions).run(({ source, sink }) => {
       const sum = sink(sumBody);
       const result = sink(resultBody);
 
       add(sum, source(Box.withValue(42)), source(Box.withValue(2)));
       mul(result, sum, source(Box.withValue(3)));
-    }, { assertNoLeak: true });
+    });
 
     assertPostCondition();
     assertEquals(sumBody.value, 44);
@@ -260,7 +264,7 @@ Deno.test(function calcIO() {
   input2RW.setValue(2);
   const [result1R, result1W] = pipeBox<number>();
   const result2RW = pipeBoxRW<number>();
-  new Context({ reportError: console.error }).run(({ source, sink }) => {
+  new Context(contextOptions).run(({ source, sink }) => {
     const result1Handle = sink(result1W);
     const result2Handle = sink(result2RW);
 
@@ -277,7 +281,7 @@ Deno.test(function calcIO() {
     const input5 = source(pipeBoxR(5));
     add(result1Handle, result3, input5);
     mul(result2Handle, result3, input5);
-  }, { assertNoLeak: true });
+  });
 
   assertEquals(result1R.getValue(), 26);
   assertEquals(result2RW.getValue(), 105);
