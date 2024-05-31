@@ -231,8 +231,8 @@ export class Context {
   run(planFn: (p: PlanFnParams) => void, options?: RunOptions) {
     const plan = new Plan(this);
     const runParams: PlanFnParams = {
-      input: (value) => input(plan, value),
-      output: (value) => output(plan, value),
+      source: (value) => source(plan, value),
+      sink: (value) => sink(plan, value),
     };
     planFn(runParams);
     run(plan, options);
@@ -246,8 +246,8 @@ type ContextOptions = {
 const defaultContextOptions: ContextOptions = {};
 
 type PlanFnParams = {
-  input<T extends object>(value: T): Handle<T>;
-  output<T extends object>(value: T): Handle<T>;
+  source<T extends object>(value: T): Handle<T>;
+  sink<T extends object>(value: T): Handle<T>;
 };
 
 const undefinedFn = () => {};
@@ -292,7 +292,7 @@ type IntermediateSlot = {
 };
 type SinkSlot = { type: "sink"; body: unknown };
 
-function input<T extends object>(plan: Plan, value: T): Handle<T> {
+function source<T extends object>(plan: Plan, value: T): Handle<T> {
   const cached = plan.inputCache.get(value);
   if (cached) {
     return cached as Handle<T>;
@@ -314,7 +314,7 @@ function input<T extends object>(plan: Plan, value: T): Handle<T> {
   return handle as Handle<T>;
 }
 
-function output<T extends object>(plan: Plan, value: T): Handle<T> {
+function sink<T extends object>(plan: Plan, value: T): Handle<T> {
   const cached = plan.outputCache.get(value);
   if (cached) {
     return cached as Handle<T>;
@@ -491,7 +491,7 @@ function prepareDataSlots(
       const dataSlot = plan.dataSlots.get(inputArg[handleIdKey]);
       if (dataSlot == null) {
         throw new LogicError(
-          `dataSlot not found for handle: ${input}`,
+          `dataSlot not found for handle: ${source}`,
         );
       }
 
