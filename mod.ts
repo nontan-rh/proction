@@ -4,8 +4,6 @@ import { Provided, Provider, ProviderWrap } from "./provider.ts";
 import { Box } from "./box.ts";
 import { Rc } from "./rc.ts";
 
-type ObjectKey = string | number | symbol;
-
 function idGenerator<T>(transform: (x: number) => T): () => T {
   let counter = 0;
   return () => {
