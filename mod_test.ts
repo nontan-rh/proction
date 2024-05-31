@@ -6,8 +6,8 @@ import {
 } from "./deps.ts";
 import {
   Context,
-  namedOutputAction,
-  namedOutputPurify,
+  multipleOutputAction,
+  multipleOutputPurify,
   singleOutputAction,
   singleOutputPurify,
   typeSpec,
@@ -98,18 +98,18 @@ Deno.test(async function twoOutputs(t) {
     assertFalse(errorReported);
   }
 
-  const divmod = namedOutputAction(
-    { div: BoxedNumber, mod: BoxedNumber },
-    {
-      div: (provider, _l, _r) => provider.acquire(),
-      mod: (provider, _l, _r) => provider.acquire(),
-    },
-    ({ div, mod }, l: Box<number>, r: Box<number>) => {
+  const divmod = multipleOutputAction(
+    [BoxedNumber, BoxedNumber],
+    [
+      (provider, _l, _r) => provider.acquire(),
+      (provider, _l, _r) => provider.acquire(),
+    ],
+    ([div, mod], l: Box<number>, r: Box<number>) => {
       div.value = Math.floor(l.value / r.value);
       mod.value = l.value % r.value;
     },
   );
-  const pureDivmod = namedOutputPurify(divmod);
+  const pureDivmod = multipleOutputPurify(divmod);
   const add = singleOutputAction(
     BoxedNumber,
     (provider, _l, _r) => provider.acquire(),
@@ -125,7 +125,7 @@ Deno.test(async function twoOutputs(t) {
       const div = output(divBody);
       const mod = output(modBody);
 
-      divmod({ div, mod }, input(Box.withValue(42)), input(Box.withValue(5)));
+      divmod([div, mod], input(Box.withValue(42)), input(Box.withValue(5)));
     }, { assertNoLeak: true });
 
     assertEquals(divBody.value, 8);
@@ -138,7 +138,7 @@ Deno.test(async function twoOutputs(t) {
 
     new Context().run(({ input, output }) => {
       const result = output(resultBody);
-      const { mod } = pureDivmod(
+      const [, mod] = pureDivmod(
         input(Box.withValue(42)),
         input(Box.withValue(5)),
       );

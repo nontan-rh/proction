@@ -29,11 +29,14 @@ export function getPlan(
   ...handles: (
     | UntypedHandle
     | Record<ObjectKey, UntypedHandle>
-    | UntypedHandle[]
+    | readonly UntypedHandle[]
   )[]
 ): Plan {
   function isHandle(
-    x: UntypedHandle | Record<ObjectKey, UntypedHandle> | UntypedHandle[],
+    x:
+      | UntypedHandle
+      | Record<ObjectKey, UntypedHandle>
+      | readonly UntypedHandle[],
   ): x is UntypedHandle {
     return parentPlanKey in x;
   }
@@ -74,7 +77,7 @@ type HandleSet<T> = {
 };
 
 const outputModeSingle = "single" as const;
-const outputModeNamed = "named" as const;
+const outputModeMultiple = "multiple" as const;
 
 type SingleOutputAction<
   I extends readonly unknown[],
@@ -88,17 +91,18 @@ type SingleOutputAction<
     ...inputArgs: I
   ): Provided<ProvidedType<O>>; // bivariant
 };
-type NamedOutputAction<I extends readonly unknown[], O extends ParamSpecSet> = {
-  outputMode: typeof outputModeNamed;
-  f(outputSet: OutputSet<O>, ...inputArgs: I): void; // bivariant
-  o: O;
-  allocators: {
-    [key in keyof OutputSet<O>]: (
-      provider: ProviderType<O[key]>,
-      ...inputArgs: I
-    ) => Provided<ProvidedType<O[key]>>;
+type MultipleOutputAction<I extends readonly unknown[], O extends ParamSpecs> =
+  {
+    outputMode: typeof outputModeMultiple;
+    f(outputSet: OutputSet<O>, ...inputArgs: I): void; // bivariant
+    o: O;
+    allocators: {
+      [key in keyof OutputSet<O>]: (
+        provider: ProviderType<O[key]>,
+        ...inputArgs: I
+      ) => Provided<ProvidedType<O[key]>>;
+    };
   };
-};
 type SingleOutputUntypedAction = {
   outputMode: typeof outputModeSingle;
   f(output: unknown, ...inputArgs: readonly unknown[]): void; // bivariant
@@ -108,18 +112,16 @@ type SingleOutputUntypedAction = {
     ...inputArgs: readonly unknown[]
   ): Provided<unknown>; // bivariant
 };
-type NamedOutputUntypedAction = {
-  outputMode: typeof outputModeNamed;
+type MultipleOutputUntypedAction = {
+  outputMode: typeof outputModeMultiple;
   f(outputSet: unknown, ...inputArgs: readonly unknown[]): void; // bivariant
-  o: ParamSpecSet;
-  allocators: {
-    [key: string]: (
-      provider: ProviderWrap<unknown, readonly unknown[]>,
-      ...inputArgs: readonly unknown[]
-    ) => Provided<unknown>;
-  };
+  o: ParamSpecs;
+  allocators: ((
+    provider: ProviderWrap<unknown, readonly unknown[]>,
+    ...inputArgs: readonly unknown[]
+  ) => Provided<unknown>)[];
 };
-type UntypedAction = SingleOutputUntypedAction | NamedOutputUntypedAction;
+type UntypedAction = SingleOutputUntypedAction | MultipleOutputUntypedAction;
 
 const actionKey = Symbol("action");
 type SingleOutputActionMeta<
@@ -128,11 +130,11 @@ type SingleOutputActionMeta<
 > = {
   [actionKey]: SingleOutputAction<I, O>;
 };
-type NamedOutputActionMeta<
+type MultipleOutputActionMeta<
   I extends readonly unknown[],
-  O extends ParamSpecSet,
+  O extends ParamSpecs,
 > = {
-  [actionKey]: NamedOutputAction<I, O>;
+  [actionKey]: MultipleOutputAction<I, O>;
 };
 
 export function singleOutputAction<
@@ -179,9 +181,9 @@ export function singleOutputAction<
   return g;
 }
 
-export function namedOutputAction<
+export function multipleOutputAction<
   I extends readonly unknown[],
-  O extends ParamSpecSet,
+  O extends ParamSpecs,
 >(
   o: O,
   allocators: {
@@ -196,9 +198,9 @@ export function namedOutputAction<
     outputSet: { [key in keyof O]: Handle<OutputType<O[key]>> }, // expanded for readability of inferred type
     ...inputArgs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
   ) => void)
-  & NamedOutputActionMeta<I, O> {
-  const action: NamedOutputAction<I, O> = {
-    outputMode: outputModeNamed,
+  & MultipleOutputActionMeta<I, O> {
+  const action: MultipleOutputAction<I, O> = {
+    outputMode: outputModeMultiple,
     f,
     o,
     allocators,
@@ -213,8 +215,8 @@ export function namedOutputAction<
     const id = plan.generateInvocationID();
     const invocation: Invocation = {
       id,
-      outputMode: outputModeNamed,
-      action: action as unknown as NamedOutputUntypedAction,
+      outputMode: outputModeMultiple,
+      action: action as unknown as MultipleOutputUntypedAction,
       inputArgs,
       outputSet,
     };
@@ -247,16 +249,16 @@ export function singleOutputPurify<
   };
 }
 
-export function namedOutputPurify<
+export function multipleOutputPurify<
   I extends readonly unknown[],
-  O extends ParamSpecSet,
+  O extends ParamSpecs,
 >(
   rawAction:
     & ((
       outputSet: HandleSet<OutputSet<O>>,
       ...inputArgs: HandleSet<I>
     ) => void)
-    & NamedOutputActionMeta<I, O>,
+    & MultipleOutputActionMeta<I, O>,
 ): (
   ...inputArgs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => { [key in keyof O]: Handle<InputType<O[key]>> } // expanded for readability of inferred type
@@ -265,12 +267,10 @@ export function namedOutputPurify<
   return (...inputArgs: HandleSet<I>): HandleSet<InputSet<O>> => {
     const plan = getPlan(...inputArgs);
 
-    const partialOutputSet: Partial<HandleSet<OutputSet<O>>> = {};
-    for (const key in action.o) {
-      const handle = plan.generateHandle() as HandleSet<
-        OutputSet<O>
-      >[typeof key];
-      partialOutputSet[key] = handle;
+    const partialOutputSet = [];
+    for (let i = 0; i < action.o.length; i++) {
+      const handle = plan.generateHandle();
+      partialOutputSet.push(handle);
     }
     const outputSet = partialOutputSet as HandleSet<OutputSet<O>>;
 
@@ -281,7 +281,7 @@ export function namedOutputPurify<
 }
 
 type InvocationID = Brand<number, "invocationID">;
-type Invocation = SingleOutputInvocation | NamedOutputInvocation;
+type Invocation = SingleOutputInvocation | MultipleOutputInvocation;
 type SingleOutputInvocation = {
   id: InvocationID;
   outputMode: typeof outputModeSingle;
@@ -289,12 +289,12 @@ type SingleOutputInvocation = {
   inputArgs: readonly UntypedHandle[];
   output: UntypedHandle;
 };
-type NamedOutputInvocation = {
+type MultipleOutputInvocation = {
   id: InvocationID;
-  outputMode: typeof outputModeNamed;
-  action: NamedOutputUntypedAction;
+  outputMode: typeof outputModeMultiple;
+  action: MultipleOutputUntypedAction;
   inputArgs: readonly UntypedHandle[];
-  outputSet: Record<ObjectKey, UntypedHandle>;
+  outputSet: readonly UntypedHandle[];
 };
 
 export class Context {
@@ -353,9 +353,12 @@ type IntermediateSlot = {
 };
 type SinkSlot = { type: "sink"; body: unknown };
 
-export type ParamSpecSet = {
-  [key: ObjectKey]: TypeSpec<unknown, readonly unknown[], unknown, unknown>;
-};
+export type ParamSpecs = readonly TypeSpec<
+  unknown,
+  readonly unknown[],
+  unknown,
+  unknown
+>[];
 
 const inputPhantomTypeKey = Symbol("inputType");
 const outputPhantomTypeKey = Symbol("outputType");
@@ -381,10 +384,10 @@ type OutputType<
   S extends TypeSpec<unknown, readonly unknown[], unknown, unknown>,
 > = S[typeof outputPhantomTypeKey];
 
-type InputSet<S extends ParamSpecSet> = {
+type InputSet<S extends ParamSpecs> = {
   [key in keyof S]: InputType<S[key]>;
 };
-type OutputSet<S extends ParamSpecSet> = {
+type OutputSet<S extends ParamSpecs> = {
   [key in keyof S]: OutputType<S[key]>;
 };
 
@@ -489,10 +492,10 @@ function run(
           decRef(plan, invocation.output);
           break;
         }
-        case "named": {
+        case "multiple": {
           const action = invocation.action;
           const restoredInputs = restoreArgs(plan, invocation.inputArgs);
-          const preparedOutputs = prepareNamedOutput(
+          const preparedOutputs = prepareMultipleOutput(
             plan,
             action.o,
             invocation.outputSet,
@@ -540,9 +543,8 @@ function prepareInvocations(
         outputToInvocation.set(output[handleIdKey], invocation);
         break;
       }
-      case "named":
-        for (const outputKey in invocation.outputSet) {
-          const output = invocation.outputSet[outputKey];
+      case "multiple":
+        for (const output of invocation.outputSet) {
           if (outputToInvocation.has(output[handleIdKey])) {
             throw new LogicError(
               "the output have two parent invocations",
@@ -650,8 +652,8 @@ function prepareDataSlots(
         prepareIntermediateOutput(plan, invocation.output);
         break;
       }
-      case "named": {
-        prepareNamedIntermediateOutput(
+      case "multiple": {
+        prepareMultipleIntermediateOutput(
           plan,
           invocation.outputSet,
         );
@@ -694,15 +696,12 @@ function prepareIntermediateOutput(
   }
 }
 
-function prepareNamedIntermediateOutput<T extends ParamSpecSet>(
+function prepareMultipleIntermediateOutput<T extends ParamSpecs>(
   plan: Plan,
   handleSet: HandleSet<OutputSet<T>>,
 ) {
-  for (const outputKey in handleSet) {
-    prepareIntermediateOutput(
-      plan,
-      handleSet[outputKey],
-    );
+  for (const output of handleSet) {
+    prepareIntermediateOutput(plan, output);
   }
 }
 
@@ -751,9 +750,12 @@ function decRefArray(plan: Plan, handleSet: readonly UntypedHandle[]): void {
   }
 }
 
-function decRefSet<T>(plan: Plan, handleSet: HandleSet<T>): void {
-  for (const key in handleSet) {
-    decRef(plan, handleSet[key]);
+function decRefSet<T extends readonly unknown[]>(
+  plan: Plan,
+  handleSet: HandleSet<T>,
+): void {
+  for (const handle of handleSet) {
+    decRef(plan, handle);
   }
 }
 
@@ -818,8 +820,8 @@ function prepareOutput<
   }
 }
 
-function prepareNamedOutput<
-  T extends ParamSpecSet,
+function prepareMultipleOutput<
+  T extends ParamSpecs,
   I extends readonly unknown[],
 >(
   plan: Plan,
@@ -833,15 +835,15 @@ function prepareNamedOutput<
     ) => Provided<ProvidedType<T[key]>>;
   },
 ): OutputSet<T> {
-  const partialPrepared: Partial<OutputSet<T>> = {};
-  for (const key in handleSet) {
-    partialPrepared[key] = prepareOutput(
+  const partialPrepared = [];
+  for (let i = 0; i < handleSet.length; i++) {
+    partialPrepared.push(prepareOutput(
       plan,
-      paramSpecSet[key],
-      handleSet[key],
+      paramSpecSet[i],
+      handleSet[i],
       inputs,
-      allocators[key],
-    );
+      allocators[i],
+    ));
   }
   return partialPrepared as OutputSet<T>;
 }
