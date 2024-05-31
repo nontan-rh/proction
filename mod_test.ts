@@ -40,18 +40,12 @@ Deno.test(function calc() {
     (result: Box<number>, l: Box<number>, r: Box<number>) =>
       result.value = l.value + r.value,
   );
-  const pureAdd = singleOutputPurify(
-    add,
-    (_l, _r) => boxedNumberProvider.acquire(),
-  );
+  const pureAdd = singleOutputPurify(add, () => boxedNumberProvider.acquire());
   const mul = singleOutputAction(
     (result: Box<number>, l: Box<number>, r: Box<number>) =>
       result.value = l.value * r.value,
   );
-  const pureMul = singleOutputPurify(
-    mul,
-    (_l, _r) => boxedNumberProvider.acquire(),
-  );
+  const pureMul = singleOutputPurify(mul, () => boxedNumberProvider.acquire());
 
   const resultBody = new Box<number>();
 
@@ -113,8 +107,8 @@ Deno.test(async function twoOutputs(t) {
     },
   );
   const pureDivmod = multipleOutputPurify(divmod, [
-    (_l, _r) => boxedNumberProvider.acquire(),
-    (_l, _r) => boxedNumberProvider.acquire(),
+    () => boxedNumberProvider.acquire(),
+    () => boxedNumberProvider.acquire(),
   ]);
   const add = singleOutputAction(
     (result: Box<number>, l: Box<number>, r: Box<number>) =>
@@ -178,18 +172,12 @@ Deno.test(async function outputUsage(t) {
     (result: Box<number>, l: Box<number>, r: Box<number>) =>
       result.value = l.value + r.value,
   );
-  const pureAdd = singleOutputPurify(
-    add,
-    (_l, _r) => boxedNumberProvider.acquire(),
-  );
+  const pureAdd = singleOutputPurify(add, () => boxedNumberProvider.acquire());
   const mul = singleOutputAction(
     (result: Box<number>, l: Box<number>, r: Box<number>) =>
       result.value = l.value * r.value,
   );
-  const pureMul = singleOutputPurify(
-    mul,
-    (_l, _r) => boxedNumberProvider.acquire(),
-  );
+  const pureMul = singleOutputPurify(mul, () => boxedNumberProvider.acquire());
 
   await t.step(function noOutputsAreUsed() {
     new Context({ reportError: console.error }).run(({ source }) => {
@@ -259,18 +247,12 @@ Deno.test(function calcIO() {
     (result: IPipeBoxW<number>, l: IPipeBoxR<number>, r: IPipeBoxR<number>) =>
       result.setValue(l.getValue() + r.getValue()),
   );
-  const pureAdd = singleOutputPurify(
-    add,
-    (_l, _r) => boxedNumberProvider.acquire(),
-  );
+  const pureAdd = singleOutputPurify(add, () => boxedNumberProvider.acquire());
   const mul = singleOutputAction(
     (result: IPipeBoxW<number>, l: IPipeBoxR<number>, r: IPipeBoxR<number>) =>
       result.setValue(l.getValue() * r.getValue()),
   );
-  const pureMul = singleOutputPurify(
-    mul,
-    (_l, _r) => boxedNumberProvider.acquire(),
-  );
+  const pureMul = singleOutputPurify(mul, () => boxedNumberProvider.acquire());
 
   const [input1R, input1W] = pipeBox<number>();
   input1W.setValue(1);

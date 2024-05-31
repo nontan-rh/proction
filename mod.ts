@@ -148,19 +148,19 @@ export function multipleOutputAction<
 }
 
 export function singleOutputPurify<
-  I extends readonly unknown[],
+  I extends readonly UntypedHandle[],
   O,
   A extends O,
 >(
   rawAction: (
     output: Handle<O>,
-    ...inputArgs: HandleSet<I>
+    ...inputArgs: I
   ) => void,
-  allocator: (...inputArgs: I) => Provided<A>,
+  allocator: (...inputArgs: BodySet<I>) => Provided<A>,
 ): (
-  ...inputArgs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
+  ...inputArgs: I
 ) => Handle<A> {
-  return (...inputArgs: HandleSet<I>): Handle<A> => {
+  return (...inputArgs: I): Handle<A> => {
     const plan = getPlan(...inputArgs);
     const output = intermediate(
       plan,
@@ -172,20 +172,22 @@ export function singleOutputPurify<
 }
 
 export function multipleOutputPurify<
-  I extends readonly unknown[],
+  I extends readonly UntypedHandle[],
   O extends readonly unknown[],
   A extends O,
 >(
   rawAction: (
     outputSet: HandleSet<O>,
-    ...inputArgs: HandleSet<I>
+    ...inputArgs: I
   ) => void,
-  allocators: { [key in keyof O]: (...inputArgs: I) => Provided<A[key]> },
+  allocators: {
+    [key in keyof O]: (...inputArgs: BodySet<I>) => Provided<A[key]>;
+  },
 ): (
-  ...inputArgs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
+  ...inputArgs: I
 ) => { [key in keyof O]: Handle<A[key]> } // expanded for readability of inferred type
 {
-  return (...inputArgs: HandleSet<I>): HandleSet<O> => {
+  return (...inputArgs: I): HandleSet<O> => {
     const plan = getPlan(...inputArgs);
 
     const partialOutputSet = [];
