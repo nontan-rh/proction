@@ -12,17 +12,17 @@ export interface Provider<T, Args extends readonly unknown[]>
 
 // Covariant wrapper for Provider<T>
 export class ProviderWrap<T, Args extends readonly unknown[]> {
-  acquire: (...args: Args) => Provided<T>;
+  acquire: (...args: Args) => ProvidedWrap<T>;
 
   constructor(provider: Provider<T, Args>) {
     this.acquire = (...args: Args) => {
       const body = provider.acquire(...args);
-      return new Provided(provider, body);
+      return new ProvidedWrap(provider, body);
     };
   }
 }
 
-export class Provided<T> {
+export class ProvidedWrap<T> {
   #body?: T;
   release: () => void;
 

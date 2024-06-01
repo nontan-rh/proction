@@ -5,7 +5,7 @@ import {
   unreachable,
 } from "./error.ts";
 import { Brand } from "./brand.ts";
-import { Provided } from "./provider.ts";
+import { ProvidedWrap } from "./provider.ts";
 import { Box } from "./box.ts";
 import { Rc } from "./rc.ts";
 export { ProviderWrap } from "./provider.ts";
@@ -156,7 +156,7 @@ export function singleOutputPurify<
     output: Handle<O>,
     ...inputs: I
   ) => void,
-  allocator: (...inputs: MappedBodyType<I>) => Provided<A>,
+  allocator: (...inputs: MappedBodyType<I>) => ProvidedWrap<A>,
 ): (
   ...inputs: I
 ) => Handle<A> {
@@ -181,7 +181,7 @@ export function multipleOutputPurify<
     ...inputs: I
   ) => void,
   allocators: {
-    [key in keyof O]: (...inputs: MappedBodyType<I>) => Provided<A[key]>;
+    [key in keyof O]: (...inputs: MappedBodyType<I>) => ProvidedWrap<A[key]>;
   },
 ): (
   ...inputs: I
@@ -268,7 +268,7 @@ const defaultContextOptions: ContextOptions = {
 type InnerContext = {
   source<T extends object>(value: T): Handle<T>;
   sink<T extends object>(value: T): Handle<T>;
-  intermediate<T>(allocator: () => Provided<T>): Handle<T>;
+  intermediate<T>(allocator: () => ProvidedWrap<T>): Handle<T>;
 };
 
 const undefinedFn = () => {};
@@ -316,8 +316,8 @@ type DataSlot =
 type SourceSlot = { type: "source"; body: unknown };
 type IntermediateSlot = {
   type: "intermediate";
-  allocator: () => Provided<unknown>;
-  body: Rc<Box<Provided<unknown>>>;
+  allocator: () => ProvidedWrap<unknown>;
+  body: Rc<Box<ProvidedWrap<unknown>>>;
 };
 type SinkSlot = { type: "sink"; body: unknown };
 
@@ -367,7 +367,7 @@ function sink<T extends object>(plan: Plan, value: T): Handle<T> {
 
 function intermediate<T>(
   plan: Plan,
-  allocator: () => Provided<T>,
+  allocator: () => ProvidedWrap<T>,
 ): Handle<T> {
   const handle = plan[internalPlanKey].generateHandle();
 
