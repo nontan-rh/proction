@@ -71,10 +71,10 @@ export function getPlan(
   return plan;
 }
 
-type HandleSet<T> = {
+type MappedHandleType<T> = {
   [key in keyof T]: Handle<T[key]>;
 };
-type BodySet<T> = {
+type MappedBodyType<T> = {
   [key in keyof T]: BodyType<T[key]>;
 };
 type BodyType<T> = T extends Handle<infer X> ? X : never;
@@ -83,27 +83,27 @@ export function singleOutputAction<
   O,
   I extends readonly unknown[],
 >(
-  f: (output: O, ...inputArgs: I) => void,
+  f: (output: O, ...inputs: I) => void,
 ): (
   output: Handle<O>,
-  ...inputArgs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
+  ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => void {
   const g = (
     output: Handle<O>,
-    ...inputArgs: HandleSet<I>
+    ...inputs: MappedHandleType<I>
   ) => {
-    const plan = getPlan(output, ...inputArgs);
+    const plan = getPlan(output, ...inputs);
 
     const id = plan[internalPlanKey].generateInvocationID();
     const invocation: Invocation = {
       id,
-      inputArgs,
-      outputSet: [output],
+      inputs,
+      outputs: [output],
       run: () => {
-        const restoredInputs = restoreArgs(plan, inputArgs);
+        const restoredInputs = restoreInputs(plan, inputs);
         const preparedOutputs = prepareOutput(plan, output);
         f(preparedOutputs, ...restoredInputs);
-        decRefArray(plan, inputArgs);
+        decRefArray(plan, inputs);
         decRef(plan, output);
       },
     };
@@ -117,28 +117,28 @@ export function multipleOutputAction<
   O extends readonly unknown[],
   I extends readonly unknown[],
 >(
-  f: (outputSet: O, ...inputArgs: I) => void,
+  f: (outputs: O, ...inputs: I) => void,
 ): (
-  outputSet: { [key in keyof O]: Handle<O[key]> }, // expanded for readability of inferred type
-  ...inputArgs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
+  outputs: { [key in keyof O]: Handle<O[key]> }, // expanded for readability of inferred type
+  ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => void {
   const g = (
-    outputSet: HandleSet<O>,
-    ...inputArgs: HandleSet<I>
+    outputs: MappedHandleType<O>,
+    ...inputs: MappedHandleType<I>
   ) => {
-    const plan = getPlan(outputSet, ...inputArgs);
+    const plan = getPlan(outputs, ...inputs);
 
     const id = plan[internalPlanKey].generateInvocationID();
     const invocation: Invocation = {
       id,
-      inputArgs,
-      outputSet,
+      inputs,
+      outputs,
       run: () => {
-        const restoredInputs = restoreArgs(plan, inputArgs);
-        const preparedOutputs = prepareMultipleOutput(plan, outputSet);
+        const restoredInputs = restoreInputs(plan, inputs);
+        const preparedOutputs = prepareMultipleOutput(plan, outputs);
         f(preparedOutputs, ...restoredInputs);
-        decRefArray(plan, inputArgs);
-        decRefArray(plan, outputSet);
+        decRefArray(plan, inputs);
+        decRefArray(plan, outputs);
       },
     };
     plan[internalPlanKey].invocations.set(invocation.id, invocation);
@@ -154,19 +154,19 @@ export function singleOutputPurify<
 >(
   rawAction: (
     output: Handle<O>,
-    ...inputArgs: I
+    ...inputs: I
   ) => void,
-  allocator: (...inputArgs: BodySet<I>) => Provided<A>,
+  allocator: (...inputs: MappedBodyType<I>) => Provided<A>,
 ): (
-  ...inputArgs: I
+  ...inputs: I
 ) => Handle<A> {
-  return (...inputArgs: I): Handle<A> => {
-    const plan = getPlan(...inputArgs);
+  return (...inputs: I): Handle<A> => {
+    const plan = getPlan(...inputs);
     const output = intermediate(
       plan,
-      () => allocator(...restoreArgs(plan, inputArgs)),
+      () => allocator(...restoreInputs(plan, inputs)),
     );
-    rawAction(output, ...inputArgs);
+    rawAction(output, ...inputs);
     return output;
   };
 }
@@ -177,41 +177,41 @@ export function multipleOutputPurify<
   A extends O,
 >(
   rawAction: (
-    outputSet: HandleSet<O>,
-    ...inputArgs: I
+    outputs: MappedHandleType<O>,
+    ...inputs: I
   ) => void,
   allocators: {
-    [key in keyof O]: (...inputArgs: BodySet<I>) => Provided<A[key]>;
+    [key in keyof O]: (...inputs: MappedBodyType<I>) => Provided<A[key]>;
   },
 ): (
-  ...inputArgs: I
+  ...inputs: I
 ) => { [key in keyof O]: Handle<A[key]> } // expanded for readability of inferred type
 {
-  return (...inputArgs: I): HandleSet<O> => {
-    const plan = getPlan(...inputArgs);
+  return (...inputs: I): MappedHandleType<O> => {
+    const plan = getPlan(...inputs);
 
-    const partialOutputSet = [];
+    const partialOutputs = [];
     for (let i = 0; i < allocators.length; i++) {
       const allocator = allocators[i];
       const handle = intermediate(
         plan,
-        () => allocator(...restoreArgs(plan, inputArgs)),
+        () => allocator(...restoreInputs(plan, inputs)),
       );
-      partialOutputSet.push(handle);
+      partialOutputs.push(handle);
     }
-    const outputSet = partialOutputSet as HandleSet<O>;
+    const outputs = partialOutputs as MappedHandleType<O>;
 
-    rawAction(outputSet, ...inputArgs);
+    rawAction(outputs, ...inputs);
 
-    return outputSet;
+    return outputs;
   };
 }
 
 type InvocationID = Brand<number, "invocationID">;
 interface Invocation {
   readonly id: InvocationID;
-  readonly inputArgs: readonly UntypedHandle[];
-  readonly outputSet: readonly UntypedHandle[];
+  readonly inputs: readonly UntypedHandle[];
+  readonly outputs: readonly UntypedHandle[];
   readonly run: () => void;
 }
 
@@ -436,7 +436,7 @@ function prepareInvocations(
 
   const outputToInvocation = new Map<HandleId, Invocation>();
   for (const invocation of plan[internalPlanKey].invocations.values()) {
-    for (const output of invocation.outputSet) {
+    for (const output of invocation.outputs) {
       if (outputToInvocation.has(output[handleIdKey])) {
         throw new LogicError(
           "the output have two parent invocations",
@@ -459,8 +459,8 @@ function prepareInvocations(
 
     visitedInvocations.set(invocationID, "temporary");
 
-    for (const inputArg of invocation.inputArgs) {
-      visitHandle(inputArg[handleIdKey]);
+    for (const input of invocation.inputs) {
+      visitHandle(input[handleIdKey]);
     }
 
     visitedInvocations.set(invocationID, "permanent");
@@ -513,9 +513,9 @@ function prepareDataSlots(
 ): void {
   for (const invocation of invocations) {
     // reserve intermediate inputs
-    for (const inputArg of invocation.inputArgs) {
+    for (const input of invocation.inputs) {
       const dataSlot = plan[internalPlanKey].dataSlots.get(
-        inputArg[handleIdKey],
+        input[handleIdKey],
       );
       if (dataSlot == null) {
         throw new LogicError(
@@ -539,15 +539,15 @@ function prepareDataSlots(
   }
 }
 
-function restoreArgs<T extends readonly UntypedHandle[]>(
+function restoreInputs<T extends readonly UntypedHandle[]>(
   plan: Plan,
   argHandles: T,
-): BodySet<T> {
+): MappedBodyType<T> {
   const restored = [];
   for (const argHandle of argHandles) {
     restored.push(restore(plan, argHandle));
   }
-  return restored as BodySet<T>;
+  return restored as MappedBodyType<T>;
 }
 
 function restore<T>(plan: Plan, handle: Handle<T>): T {
@@ -578,8 +578,8 @@ function restore<T>(plan: Plan, handle: Handle<T>): T {
   }
 }
 
-function decRefArray(plan: Plan, handleSet: readonly UntypedHandle[]): void {
-  for (const handle of handleSet) {
+function decRefArray(plan: Plan, handles: readonly UntypedHandle[]): void {
+  for (const handle of handles) {
     decRef(plan, handle);
   }
 }
@@ -643,16 +643,16 @@ function prepareMultipleOutput<
   T extends readonly UntypedHandle[],
 >(
   plan: Plan,
-  handleSet: T,
-): BodySet<T> {
+  handles: T,
+): MappedBodyType<T> {
   const partialPrepared = [];
-  for (let i = 0; i < handleSet.length; i++) {
+  for (let i = 0; i < handles.length; i++) {
     partialPrepared.push(prepareOutput(
       plan,
-      handleSet[i],
+      handles[i],
     ));
   }
-  return partialPrepared as BodySet<T>;
+  return partialPrepared as MappedBodyType<T>;
 }
 
 function assertNoLeak(plan: Plan) {
