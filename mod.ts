@@ -239,17 +239,18 @@ export class Context {
     this[contextOptionsKey] = mergedOptions;
   }
 
-  run(planFn: (p: PlanFnParams) => void, options?: RunOptions) {
+  run(bodyFn: (inner: InnerContext) => void, options?: RunOptions) {
     const plan: Plan = {
       context: this,
       [internalPlanKey]: new InternalPlan(this),
     };
     plan[internalPlanKey].plan = plan;
-    const runParams: PlanFnParams = {
+    const runParams: InnerContext = {
       source: (value) => source(plan, value),
       sink: (value) => sink(plan, value),
+      intermediate: (allocator) => intermediate(plan, allocator),
     };
-    planFn(runParams);
+    bodyFn(runParams);
     run(plan, options);
   }
 }
@@ -264,9 +265,10 @@ const defaultContextOptions: ContextOptions = {
   assertNoLeak: false,
 };
 
-type PlanFnParams = {
+type InnerContext = {
   source<T extends object>(value: T): Handle<T>;
   sink<T extends object>(value: T): Handle<T>;
+  intermediate<T>(allocator: () => Provided<T>): Handle<T>;
 };
 
 const undefinedFn = () => {};
