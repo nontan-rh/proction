@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  push:
+
+jobs:
+  check:
+    strategy:
+      matrix:
+        deno-version: [v1.x, v1.41]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v1
+        with:
+          deno-version: ${{ matrix.deno-version }}
+      - run: deno fmt --check
+      - run: deno lint
+      - run: deno test
