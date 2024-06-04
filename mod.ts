@@ -119,7 +119,8 @@ export function multipleOutputAction<
 >(
   f: (outputs: O, ...inputs: I) => void,
 ): (
-  outputs: { [key in keyof O]: Handle<O[key]> }, // expanded for readability of inferred type
+  outputs: { [key in keyof O]: Handle<O[key]> } // expanded for readability of inferred type
+  ,
   ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => void {
   const g = (
