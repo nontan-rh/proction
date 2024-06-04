@@ -24,11 +24,11 @@ export class ProviderWrap<T, Args extends readonly unknown[]> {
 
 export class ProvidedWrap<T> {
   #body?: T;
-  release: () => void;
+  [Symbol.dispose]!: () => void; // properly initialized in constructor, but TS cannot detect it.
 
   constructor(releaser: Releaser<T>, body: T) {
     this.#body = body;
-    this.release = () => {
+    this[Symbol.dispose] = () => {
       const body = this.#body;
       if (body == null) {
         return;

@@ -378,7 +378,7 @@ function intermediate<T>(
       if (!x.isSet) {
         return;
       }
-      x.value.release();
+      x.value[Symbol.dispose]();
       x.clear();
     }, plan.context[contextOptionsKey].reportError),
     allocator,
