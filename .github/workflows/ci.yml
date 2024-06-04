@@ -17,5 +17,7 @@ jobs:
         with:
           deno-version: ${{ matrix.deno-version }}
       - run: deno fmt --check
+        if: ${{ matrix.deno-version != 'v1.x' }}
       - run: deno lint
+        if: ${{ matrix.deno-version != 'v1.x' }}
       - run: deno test
