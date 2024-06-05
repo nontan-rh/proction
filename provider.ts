@@ -22,25 +22,20 @@ export class ProviderWrap<T, Args extends readonly unknown[]> {
   }
 }
 
+export interface AllocatorResult<T> {
+  get body(): T;
+  [Symbol.dispose](): void;
+}
+
 export class ProvidedWrap<T> {
   #disposed: boolean;
   #body?: T;
-  [Symbol.dispose]!: () => void; // properly initialized in constructor, but TS cannot detect it.
+  #releaser: Releaser<T>;
 
   constructor(releaser: Releaser<T>, body: T) {
     this.#disposed = false;
     this.#body = body;
-    this[Symbol.dispose] = () => {
-      if (this.#disposed) {
-        return;
-      }
-      const body = this.#body!;
-
-      this.#disposed = true;
-      this.#body = undefined;
-
-      releaser.release(body);
-    };
+    this.#releaser = releaser;
   }
 
   get body(): T {
@@ -49,5 +44,18 @@ export class ProvidedWrap<T> {
       throw new LogicError("Provided is already released");
     }
     return body;
+  }
+
+  [Symbol.dispose]() {
+    if (this.#disposed) {
+      return;
+    }
+
+    const body = this.#body!;
+
+    this.#disposed = true;
+    this.#body = undefined;
+
+    this.#releaser.release(body);
   }
 }

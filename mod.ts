@@ -5,10 +5,10 @@ import {
   unreachable,
 } from "./error.ts";
 import { Brand } from "./brand.ts";
-import { ProvidedWrap } from "./provider.ts";
+import { AllocatorResult } from "./provider.ts";
 import { Box } from "./box.ts";
 import { Rc } from "./rc.ts";
-export { ProviderWrap } from "./provider.ts";
+export { type AllocatorResult, ProviderWrap } from "./provider.ts";
 
 function idGenerator<T>(transform: (x: number) => T): () => T {
   let counter = 0;
@@ -157,7 +157,7 @@ export function singleOutputPurify<
     output: Handle<O>,
     ...inputs: I
   ) => void,
-  allocator: (...inputs: MappedBodyType<I>) => ProvidedWrap<A>,
+  allocator: (...inputs: MappedBodyType<I>) => AllocatorResult<A>,
 ): (
   ...inputs: I
 ) => Handle<A> {
@@ -182,7 +182,7 @@ export function multipleOutputPurify<
     ...inputs: I
   ) => void,
   allocators: {
-    [key in keyof O]: (...inputs: MappedBodyType<I>) => ProvidedWrap<A[key]>;
+    [key in keyof O]: (...inputs: MappedBodyType<I>) => AllocatorResult<A[key]>;
   },
 ): (
   ...inputs: I
@@ -269,7 +269,7 @@ const defaultContextOptions: ContextOptions = {
 type InnerContext = {
   source<T extends object>(value: T): Handle<T>;
   sink<T extends object>(value: T): Handle<T>;
-  intermediate<T>(allocator: () => ProvidedWrap<T>): Handle<T>;
+  intermediate<T>(allocator: () => AllocatorResult<T>): Handle<T>;
 };
 
 const undefinedFn = () => {};
@@ -317,8 +317,8 @@ type DataSlot =
 type SourceSlot = { type: "source"; body: unknown };
 type IntermediateSlot = {
   type: "intermediate";
-  allocator: () => ProvidedWrap<unknown>;
-  body: Rc<Box<ProvidedWrap<unknown>>>;
+  allocator: () => AllocatorResult<unknown>;
+  body: Rc<Box<AllocatorResult<unknown>>>;
 };
 type SinkSlot = { type: "sink"; body: unknown };
 
@@ -368,7 +368,7 @@ function sink<T extends object>(plan: Plan, value: T): Handle<T> {
 
 function intermediate<T>(
   plan: Plan,
-  allocator: () => ProvidedWrap<T>,
+  allocator: () => AllocatorResult<T>,
 ): Handle<T> {
   const handle = plan[internalPlanKey].generateHandle();
 
