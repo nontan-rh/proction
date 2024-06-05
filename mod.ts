@@ -71,7 +71,7 @@ export function singleOutputAction<
   O,
   I extends readonly unknown[],
 >(
-  f: (output: O, ...inputs: I) => void,
+  f: (output: O, ...inputs: I) => unknown,
 ): (
   output: Handle<O>,
   ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
@@ -87,10 +87,10 @@ export function singleOutputAction<
       id,
       inputs,
       outputs: [output],
-      run: () => {
+      run: async () => {
         const restoredInputs = restoreInputs(plan, inputs);
         const preparedOutputs = prepareOutput(plan, output);
-        f(preparedOutputs, ...restoredInputs);
+        await f(preparedOutputs, ...restoredInputs);
         decRefArray(plan, inputs);
         decRef(plan, output);
       },
@@ -105,7 +105,7 @@ export function multipleOutputAction<
   O extends readonly unknown[],
   I extends readonly unknown[],
 >(
-  f: (outputs: O, ...inputs: I) => void,
+  f: (outputs: O, ...inputs: I) => unknown,
 ): (
   outputs: { [key in keyof O]: Handle<O[key]> } // expanded for readability of inferred type
   ,
@@ -122,10 +122,10 @@ export function multipleOutputAction<
       id,
       inputs,
       outputs,
-      run: () => {
+      run: async () => {
         const restoredInputs = restoreInputs(plan, inputs);
         const preparedOutputs = prepareMultipleOutput(plan, outputs);
-        f(preparedOutputs, ...restoredInputs);
+        await f(preparedOutputs, ...restoredInputs);
         decRefArray(plan, inputs);
         decRefArray(plan, outputs);
       },
@@ -201,7 +201,7 @@ interface Invocation {
   readonly id: InvocationID;
   readonly inputs: readonly UntypedHandle[];
   readonly outputs: readonly UntypedHandle[];
-  readonly run: () => void;
+  readonly run: () => Promise<void>;
 }
 
 const contextOptionsKey = Symbol("contextOptions");
@@ -228,7 +228,7 @@ export class Context {
     this[contextOptionsKey] = mergedOptions;
   }
 
-  run(bodyFn: (inner: InnerContext) => void, options?: RunOptions) {
+  async run(bodyFn: (inner: InnerContext) => void, options?: RunOptions) {
     const plan: Plan = {
       context: this,
       [internalPlanKey]: new InternalPlan(this),
@@ -240,7 +240,7 @@ export class Context {
       intermediate: (allocator) => intermediate(plan, allocator),
     };
     bodyFn(runParams);
-    run(plan, options);
+    await run(plan, options);
   }
 }
 
@@ -376,10 +376,10 @@ export type RunOptions = {};
 
 const defaultRunOptions: RunOptions = {};
 
-function run(
+async function run(
   plan: Plan,
   options?: RunOptions,
-): void {
+): Promise<void> {
   const _mergedOptions = { ...defaultRunOptions, ...options };
 
   if (plan[internalPlanKey].state !== "initial") {
@@ -397,7 +397,7 @@ function run(
     plan[internalPlanKey].state = "running";
 
     for (const invocation of invocations) {
-      invocation.run();
+      await invocation.run();
     }
 
     if (plan.context[contextOptionsKey].assertNoLeak) {

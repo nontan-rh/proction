@@ -33,7 +33,7 @@ const contextOptions: Partial<ContextOptions> = {
   assertNoLeak: true,
 };
 
-Deno.test(function calc() {
+Deno.test(async function calc() {
   let errorReported = false;
 
   const boxedNumberPool = new Pool<Box<number>, []>(
@@ -59,7 +59,7 @@ Deno.test(function calc() {
 
   const resultBody = new Box<number>();
 
-  new Context(contextOptions).run(({ source, sink }) => {
+  await new Context(contextOptions).run(({ source, sink }) => {
     const result = sink(resultBody);
     const result1 = pureAdd(
       source(Box.withValue(1)),
@@ -80,8 +80,8 @@ Deno.test(function calc() {
   assertFalse(errorReported);
 });
 
-Deno.test(function empty() {
-  new Context(contextOptions).run(() => {});
+Deno.test(async function empty() {
+  await new Context(contextOptions).run(() => {});
 });
 
 Deno.test(async function twoOutputs(t) {
@@ -123,11 +123,11 @@ Deno.test(async function twoOutputs(t) {
       result.value = l.value + r.value,
   );
 
-  await t.step(function bothOutputsAreGlobal() {
+  await t.step(async function bothOutputsAreGlobal() {
     const divBody = new Box<number>();
     const modBody = new Box<number>();
 
-    new Context(contextOptions).run(({ source, sink }) => {
+    await new Context(contextOptions).run(({ source, sink }) => {
       const div = sink(divBody);
       const mod = sink(modBody);
 
@@ -139,10 +139,10 @@ Deno.test(async function twoOutputs(t) {
     assertPostCondition();
   });
 
-  await t.step(function modOutputIsIntermediate() {
+  await t.step(async function modOutputIsIntermediate() {
     const resultBody = new Box<number>();
 
-    new Context(contextOptions).run(({ source, sink }) => {
+    await new Context(contextOptions).run(({ source, sink }) => {
       const result = sink(resultBody);
       const [, mod] = pureDivmod(
         source(Box.withValue(42)),
@@ -187,8 +187,8 @@ Deno.test(async function outputUsage(t) {
   );
   const pureMul = singleOutputPurify(mul, () => boxedNumberProvider.acquire());
 
-  await t.step(function noOutputsAreUsed() {
-    new Context(contextOptions).run(({ source }) => {
+  await t.step(async function noOutputsAreUsed() {
+    await new Context(contextOptions).run(({ source }) => {
       const input1 = source(Box.withValue(42));
       const input2 = source(Box.withValue(5));
 
@@ -199,11 +199,11 @@ Deno.test(async function outputUsage(t) {
     assertPostCondition();
   });
 
-  await t.step(function outputIsUsedTwice() {
+  await t.step(async function outputIsUsedTwice() {
     const result1Body = new Box<number>();
     const result2Body = new Box<number>();
 
-    new Context(contextOptions).run(({ source, sink }) => {
+    await new Context(contextOptions).run(({ source, sink }) => {
       const result1 = sink(result1Body);
       const result2 = sink(result2Body);
 
@@ -220,11 +220,11 @@ Deno.test(async function outputUsage(t) {
     assertEquals(result2Body.value, 48);
   });
 
-  await t.step(function globalOutputIsUsedAsInput() {
+  await t.step(async function globalOutputIsUsedAsInput() {
     const sumBody = new Box<number>();
     const resultBody = new Box<number>();
 
-    new Context(contextOptions).run(({ source, sink }) => {
+    await new Context(contextOptions).run(({ source, sink }) => {
       const sum = sink(sumBody);
       const result = sink(resultBody);
 
@@ -238,7 +238,7 @@ Deno.test(async function outputUsage(t) {
   });
 });
 
-Deno.test(function calcIO() {
+Deno.test(async function calcIO() {
   let errorReported = false;
 
   const boxedNumberPool = new Pool<IPipeBoxRW<number>, []>(
@@ -268,7 +268,7 @@ Deno.test(function calcIO() {
   input2RW.setValue(2);
   const [result1R, result1W] = pipeBox<number>();
   const result2RW = pipeBoxRW<number>();
-  new Context(contextOptions).run(({ source, sink }) => {
+  await new Context(contextOptions).run(({ source, sink }) => {
     const result1Handle = sink(result1W);
     const result2Handle = sink(result2RW);
 
