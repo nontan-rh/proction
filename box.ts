@@ -1,7 +1,8 @@
 import { LogicError } from "./error.ts";
 
 export class Box<T> {
-  #value: [T] | [] = [];
+  #isSet: boolean = false;
+  #value?: T;
 
   static withValue<T>(value: T): Box<T> {
     const box = new Box<T>();
@@ -11,21 +12,23 @@ export class Box<T> {
 
   get value(): T {
     const v = this.#value;
-    if (v.length === 0) {
+    if (!this.#isSet) {
       throw new LogicError("Box is not initialized");
     }
-    return v[0];
+    return v!;
   }
 
   set value(v: T) {
-    this.#value[0] = v;
+    this.#isSet = true;
+    this.#value = v;
   }
 
   get isSet(): boolean {
-    return this.#value.length !== 0;
+    return this.#isSet;
   }
 
   clear(): void {
-    this.#value.length = 0;
+    this.#isSet = false;
+    this.#value = undefined;
   }
 }
