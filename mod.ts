@@ -6,8 +6,7 @@ import {
 } from "./error.ts";
 import { Brand } from "./brand.ts";
 import { AllocatorResult } from "./provider.ts";
-import { Box } from "./box.ts";
-import { Rc } from "./rc.ts";
+import { DelayedRc } from "./delayedrc.ts";
 export { type AllocatorResult, ProviderWrap } from "./provider.ts";
 
 function idGenerator<T>(transform: (x: number) => T): () => T {
@@ -318,7 +317,7 @@ type SourceSlot = { type: "source"; body: unknown };
 type IntermediateSlot = {
   type: "intermediate";
   allocator: () => AllocatorResult<unknown>;
-  body: Rc<Box<AllocatorResult<unknown>>>;
+  body: DelayedRc<AllocatorResult<unknown>>;
 };
 type SinkSlot = { type: "sink"; body: unknown };
 
@@ -374,12 +373,8 @@ function intermediate<T>(
 
   plan[internalPlanKey].dataSlots.set(handle[handleIdKey], {
     type: "intermediate",
-    body: new Rc(new Box(), (x) => {
-      if (!x.isSet) {
-        return;
-      }
-      x.value[Symbol.dispose]();
-      x.clear();
+    body: new DelayedRc((x) => {
+      x[Symbol.dispose]();
     }, plan.context[contextOptionsKey].reportError),
     allocator,
   });
@@ -566,10 +561,7 @@ function restore<T>(plan: Plan, handle: Handle<T>): T {
       return body as T;
     }
     case "intermediate":
-      if (!dataSlot.body.body.isSet) {
-        throw new LogicError("data slot is not set yet");
-      }
-      return dataSlot.body.body.value.body as T;
+      return dataSlot.body.body.body as T;
     case "sink": {
       const body = dataSlot.body;
       return body as T;
@@ -621,15 +613,9 @@ function prepareOutput<T>(
     case "source":
       throw new LogicError(`unexpected data slot type: ${type}`);
     case "intermediate": {
-      if (dataSlot.body.isFreed) {
-        throw new LogicError("data slot is already freed");
-      }
-      if (dataSlot.body.body.isSet) {
-        throw new LogicError("data slot is already set");
-      }
-      const body = dataSlot.allocator();
-      dataSlot.body.body.value = body;
-      return body.body as T;
+      const allocatorResult = dataSlot.allocator();
+      dataSlot.body.initialize(allocatorResult);
+      return allocatorResult.body as T;
     }
     case "sink": {
       const body = dataSlot.body;

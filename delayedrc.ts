@@ -1,26 +1,34 @@
 import { LogicError } from "./error.ts";
 
-export class Rc<T> {
-  #body: T;
+export class DelayedRc<T> {
+  #initialized: boolean;
+  #body?: T;
   #count: number;
   #destroy: (x: T) => void;
   #reportError: (e: unknown) => void;
 
   constructor(
-    body: T,
     destroy: (x: T) => void,
     reportError: (e: unknown) => void,
   ) {
-    this.#body = body;
+    this.#initialized = false;
+    this.#body = undefined;
     this.#count = 1;
     this.#destroy = destroy;
     this.#reportError = reportError;
   }
 
-  get body(): T {
-    this.#assertNotFreed();
+  initialize(body: T) {
+    this.#assertNotInitialized();
 
-    return this.#body;
+    this.#initialized = true;
+    this.#body = body;
+  }
+
+  get body(): T {
+    this.#assertIsValid();
+
+    return this.#body!;
   }
 
   incRef(): void {
@@ -30,19 +38,21 @@ export class Rc<T> {
   }
 
   decRef(): void {
-    this.#assertNotFreed();
+    this.#assertIsValid();
 
     this.#count--;
 
     if (this.#count <= 0) {
       try {
-        this.#destroy(this.#body);
+        this.#destroy(this.#body!);
       } catch (e: unknown) {
         try {
           this.#reportError(e);
         } catch {
           // cannot recover
         }
+      } finally {
+        this.#body = undefined;
       }
     }
   }
@@ -51,7 +61,22 @@ export class Rc<T> {
     return this.#count <= 0;
   }
 
+  #assertNotInitialized(): void {
+    if (this.#initialized) {
+      throw new LogicError("this reference counter is already initialized");
+    }
+  }
+
   #assertNotFreed(): void {
+    if (this.isFreed) {
+      throw new LogicError("this reference counter is already freed");
+    }
+  }
+
+  #assertIsValid(): void {
+    if (!this.#initialized) {
+      throw new LogicError("this reference counter is not initialized yet");
+    }
     if (this.isFreed) {
       throw new LogicError("this reference counter is already freed");
     }
