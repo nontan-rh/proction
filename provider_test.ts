@@ -9,6 +9,7 @@ assertIsChildTypeOf<AllocatorResult<ChildType>, AllocatorResult<ParentType>>();
 // @ts-expect-error: AllocatorResult is covariant
 assertIsChildTypeOf<AllocatorResult<ParentType>, AllocatorResult<ChildType>>();
 
+// @ts-expect-error: ProvidedWrap is invariant
 assertIsChildTypeOf<ProvidedWrap<ChildType>, ProvidedWrap<ParentType>>();
-// @ts-expect-error: ProvidedWrap is covariant
+// @ts-expect-error: ProvidedWrap is invariant
 assertIsChildTypeOf<ProvidedWrap<ParentType>, ProvidedWrap<ChildType>>();

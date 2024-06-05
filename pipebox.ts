@@ -17,15 +17,15 @@ export function pipeBoxRW<T>(): IPipeBoxRW<T> {
 }
 
 export interface IPipeBoxW<T> {
-  setValue(v: T): void;
-  clear(): void;
+  setValue: (v: T) => void;
+  clear: () => void;
 }
 
 export interface IPipeBoxR<T> {
-  getValue(): T;
+  getValue: () => T;
 }
 
-export interface IPipeBoxRW<T> extends IPipeBoxR<T>, IPipeBoxW<T> {}
+export type IPipeBoxRW<T> = IPipeBoxR<T> & IPipeBoxW<T>;
 
 class PipeBoxW<T> implements IPipeBoxW<T> {
   #box: Box<T>;

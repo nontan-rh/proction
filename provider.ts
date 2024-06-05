@@ -1,13 +1,13 @@
 import { LogicError } from "./error.ts";
 
 interface Releaser<T> {
-  release(x: T): void;
+  release: (x: T) => void;
 }
 
 // Invariant
 export interface Provider<T, Args extends readonly unknown[]>
   extends Releaser<T> {
-  acquire(...args: Args): T;
+  acquire: (...args: Args) => T;
 }
 
 // Covariant wrapper for Provider<T>
@@ -24,7 +24,7 @@ export class ProviderWrap<T, Args extends readonly unknown[]> {
 
 export interface AllocatorResult<T> {
   get body(): T;
-  [Symbol.dispose](): void;
+  [Symbol.dispose]: () => void;
 }
 
 export class ProvidedWrap<T> {
