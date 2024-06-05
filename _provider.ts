@@ -1,4 +1,4 @@
-import { LogicError } from "./error.ts";
+import { LogicError } from "./_error.ts";
 
 interface Releaser<T> {
   release: (x: T) => void;

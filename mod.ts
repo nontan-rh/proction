@@ -3,19 +3,12 @@ import {
   LogicError,
   PreconditionError,
   unreachable,
-} from "./error.ts";
-import { Brand } from "./brand.ts";
-import { AllocatorResult } from "./provider.ts";
-import { DelayedRc } from "./delayedrc.ts";
-export { type AllocatorResult, ProviderWrap } from "./provider.ts";
-
-function idGenerator<T>(transform: (x: number) => T): () => T {
-  let counter = 0;
-  return () => {
-    counter += 1;
-    return transform(counter);
-  };
-}
+} from "./_error.ts";
+import { Brand } from "./_brand.ts";
+import { AllocatorResult } from "./_provider.ts";
+import { DelayedRc } from "./_delayedrc.ts";
+import { idGenerator } from "./_idgenerator.ts";
+export { type AllocatorResult, ProviderWrap } from "./_provider.ts";
 
 const parentPlanKey = Symbol("parentPlan");
 const handleIdKey = Symbol("handleId");
@@ -28,20 +21,24 @@ type Handle<T> = {
 };
 type UntypedHandle = Handle<unknown>;
 
+type MappedHandleType<T> = {
+  [key in keyof T]: Handle<T[key]>;
+};
+type MappedBodyType<T> = {
+  [key in keyof T]: BodyType<T[key]>;
+};
+type BodyType<T> = T extends Handle<infer X> ? X : never;
+
+function isHandle(x: object): x is UntypedHandle {
+  return parentPlanKey in x;
+}
+
 export function getPlan(
   ...handles: (
     | UntypedHandle
     | readonly UntypedHandle[]
   )[]
 ): Plan {
-  function isHandle(
-    x:
-      | UntypedHandle
-      | readonly UntypedHandle[],
-  ): x is UntypedHandle {
-    return parentPlanKey in x;
-  }
-
   let plan: Plan | undefined;
   for (const t of handles) {
     if (isHandle(t)) {
@@ -69,14 +66,6 @@ export function getPlan(
 
   return plan;
 }
-
-type MappedHandleType<T> = {
-  [key in keyof T]: Handle<T[key]>;
-};
-type MappedBodyType<T> = {
-  [key in keyof T]: BodyType<T[key]>;
-};
-type BodyType<T> = T extends Handle<infer X> ? X : never;
 
 export function singleOutputAction<
   O,

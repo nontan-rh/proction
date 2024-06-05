@@ -3,7 +3,7 @@ import {
   ChildType,
   ParentType,
 } from "./_testutils/mod.ts";
-import { AllocatorResult, ProvidedWrap } from "./provider.ts";
+import { AllocatorResult, ProvidedWrap } from "./_provider.ts";
 
 assertIsChildTypeOf<AllocatorResult<ChildType>, AllocatorResult<ParentType>>();
 // @ts-expect-error: AllocatorResult is covariant

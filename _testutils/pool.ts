@@ -1,4 +1,4 @@
-import { Provider } from "./provider.ts";
+import { Provider } from "../_provider.ts";
 
 export class Pool<T, Args extends readonly unknown[]>
   implements Provider<T, Args> {

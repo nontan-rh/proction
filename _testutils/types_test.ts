@@ -1,4 +1,4 @@
-import { assertIsChildTypeOf, ChildType, ParentType } from "./mod.ts";
+import { assertIsChildTypeOf, ChildType, ParentType } from "./types.ts";
 
 let parent: ParentType = undefined!;
 let child: ChildType = undefined!;

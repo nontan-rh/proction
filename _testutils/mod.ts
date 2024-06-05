@@ -1,8 +1,11 @@
-export class ParentType {
-  a: number = 0;
-}
-export class ChildType extends ParentType {
-  b: number = 0;
-}
-
-export function assertIsChildTypeOf<A extends B, B>(_a?: A, _b?: B) {}
+export { Box } from "./box.ts";
+export {
+  type IPipeBoxR,
+  type IPipeBoxRW,
+  type IPipeBoxW,
+  pipeBox,
+  pipeBoxR,
+  pipeBoxRW,
+} from "./pipebox.ts";
+export { Pool } from "./pool.ts";
+export { assertIsChildTypeOf, ChildType, ParentType } from "./types.ts";

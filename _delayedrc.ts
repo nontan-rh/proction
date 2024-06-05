@@ -1,4 +1,4 @@
-import { LogicError } from "./error.ts";
+import { LogicError } from "./_error.ts";
 
 export class DelayedRc<T> {
   #initialized: boolean;

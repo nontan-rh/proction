@@ -13,8 +13,8 @@ import {
   singleOutputAction,
   singleOutputPurify,
 } from "./mod.ts";
-import { Pool } from "./pool.ts";
-import { Box } from "./box.ts";
+import { Pool } from "./_testutils/pool.ts";
+import { Box } from "./_testutils/box.ts";
 import {
   IPipeBoxR,
   IPipeBoxRW,
@@ -22,7 +22,7 @@ import {
   pipeBox,
   pipeBoxR,
   pipeBoxRW,
-} from "./pipebox.ts";
+} from "./_testutils/pipebox.ts";
 
 const contextOptions: Partial<ContextOptions> = {
   reportError: console.error,
