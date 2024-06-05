@@ -2,7 +2,7 @@ import { LogicError } from "./error.ts";
 
 export class DelayedRc<T> {
   #initialized: boolean;
-  #body?: T;
+  #managedObject?: T;
   #count: number;
   #destroy: (x: T) => void;
   #reportError: (e: unknown) => void;
@@ -12,23 +12,23 @@ export class DelayedRc<T> {
     reportError: (e: unknown) => void,
   ) {
     this.#initialized = false;
-    this.#body = undefined;
+    this.#managedObject = undefined;
     this.#count = 1;
     this.#destroy = destroy;
     this.#reportError = reportError;
   }
 
-  initialize(body: T) {
+  initialize(managedObject: T) {
     this.#assertNotInitialized();
 
     this.#initialized = true;
-    this.#body = body;
+    this.#managedObject = managedObject;
   }
 
-  get body(): T {
+  get managedObject(): T {
     this.#assertIsValid();
 
-    return this.#body!;
+    return this.#managedObject!;
   }
 
   incRef(): void {
@@ -44,7 +44,7 @@ export class DelayedRc<T> {
 
     if (this.#count <= 0) {
       try {
-        this.#destroy(this.#body!);
+        this.#destroy(this.#managedObject!);
       } catch (e: unknown) {
         try {
           this.#reportError(e);
@@ -52,7 +52,7 @@ export class DelayedRc<T> {
           // cannot recover
         }
       } finally {
-        this.#body = undefined;
+        this.#managedObject = undefined;
       }
     }
   }

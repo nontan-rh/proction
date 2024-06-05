@@ -317,7 +317,7 @@ type SourceSlot = { type: "source"; body: unknown };
 type IntermediateSlot = {
   type: "intermediate";
   allocator: () => AllocatorResult<unknown>;
-  body: DelayedRc<AllocatorResult<unknown>>;
+  allocatorResultContainer: DelayedRc<AllocatorResult<unknown>>;
 };
 type SinkSlot = { type: "sink"; body: unknown };
 
@@ -373,7 +373,7 @@ function intermediate<T>(
 
   plan[internalPlanKey].dataSlots.set(handle[handleIdKey], {
     type: "intermediate",
-    body: new DelayedRc((x) => {
+    allocatorResultContainer: new DelayedRc((x) => {
       x[Symbol.dispose]();
     }, plan.context[contextOptionsKey].reportError),
     allocator,
@@ -524,7 +524,7 @@ function prepareDataSlots(
         case "source":
           break;
         case "intermediate":
-          dataSlot.body.incRef();
+          dataSlot.allocatorResultContainer.incRef();
           break;
         case "sink":
           break;
@@ -561,7 +561,7 @@ function restore<T>(plan: Plan, handle: Handle<T>): T {
       return body as T;
     }
     case "intermediate":
-      return dataSlot.body.body.body as T;
+      return dataSlot.allocatorResultContainer.managedObject.body as T;
     case "sink": {
       const body = dataSlot.body;
       return body as T;
@@ -590,7 +590,7 @@ function decRef(plan: Plan, handle: UntypedHandle): void {
     case "source":
       break;
     case "intermediate":
-      dataSlot.body.decRef();
+      dataSlot.allocatorResultContainer.decRef();
       break;
     case "sink":
       break;
@@ -614,7 +614,7 @@ function prepareOutput<T>(
       throw new LogicError(`unexpected data slot type: ${type}`);
     case "intermediate": {
       const allocatorResult = dataSlot.allocator();
-      dataSlot.body.initialize(allocatorResult);
+      dataSlot.allocatorResultContainer.initialize(allocatorResult);
       return allocatorResult.body as T;
     }
     case "sink": {
@@ -649,7 +649,7 @@ function assertNoLeak(plan: Plan) {
       case "source":
         break;
       case "intermediate":
-        if (!dataSlot.body.isFreed) {
+        if (!dataSlot.allocatorResultContainer.isFreed) {
           throw new AssertionError(
             "intermediate data slot is not freed",
           );
