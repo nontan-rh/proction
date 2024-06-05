@@ -3,10 +3,13 @@ import {
   assertFalse,
   assertGreater,
   assertGreaterOrEqual,
+  assertThrows,
 } from "./deps.ts";
 import {
+  AllocatorResult,
   Context,
   ContextOptions,
+  Handle,
   multipleOutputAction,
   multipleOutputPurify,
   ProviderWrap,
@@ -23,6 +26,7 @@ import {
   pipeBoxR,
   pipeBoxRW,
 } from "./_testutils/pipebox.ts";
+import { assertIsChildTypeOf, testValue } from "./_testutils/types.ts";
 
 const contextOptions: Partial<ContextOptions> = {
   reportError: console.error,
@@ -289,4 +293,216 @@ Deno.test(function calcIO() {
   assertGreater(boxedNumberPool.pooledCount, 0);
   assertEquals(boxedNumberPool.taintedCount, 0);
   assertFalse(errorReported);
+});
+
+Deno.test(function types() {
+  const so = singleOutputAction(
+    (_x: Box<number>, _a: Box<string>, _b: Box<boolean>) => {},
+  );
+  const mo = multipleOutputAction(
+    (
+      [_x, _y]: [Box<number>, Box<string>],
+      _a: Box<boolean>,
+      _b: Box<bigint>,
+    ) => {},
+  );
+  const sop = singleOutputPurify(
+    so,
+    (_a: Box<string>, _b: Box<boolean>) =>
+      testValue<AllocatorResult<Box<number>>>(),
+  );
+  const mop = multipleOutputPurify(mo, [
+    (_a: Box<boolean>, _b: Box<bigint>) =>
+      testValue<AllocatorResult<Box<number>>>(),
+    (_a: Box<boolean>, _b: Box<bigint>) =>
+      testValue<AllocatorResult<Box<string>>>(),
+  ]);
+
+  // testValue throws an error
+  assertThrows(() => {
+    // so: OK
+    so(
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
+    );
+
+    // mo: OK
+    mo(
+      [testValue<Handle<Box<number>>>(), testValue<Handle<Box<string>>>()],
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<bigint>>>(),
+    );
+
+    // sop: OK
+    sop(
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
+    );
+    assertIsChildTypeOf<ReturnType<typeof sop>, Handle<Box<number>>>();
+    assertIsChildTypeOf<Handle<Box<number>>, ReturnType<typeof sop>>();
+
+    // mop: OK
+    mop(
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<bigint>>>(),
+    );
+    assertIsChildTypeOf<ReturnType<typeof mop>[0], Handle<Box<number>>>();
+    assertIsChildTypeOf<Handle<Box<number>>, ReturnType<typeof mop>[0]>();
+    assertIsChildTypeOf<ReturnType<typeof mop>[1], Handle<Box<string>>>();
+    assertIsChildTypeOf<Handle<Box<string>>, ReturnType<typeof mop>[1]>();
+
+    // so: NG
+    so(
+      // @ts-expect-error: output type is wrong
+      testValue<Handle<Box<symbol>>>(),
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
+    );
+    so(
+      testValue<Handle<Box<number>>>(),
+      // @ts-expect-error: 1st input type is wrong
+      testValue<Handle<Box<symbol>>>(),
+      testValue<Handle<Box<boolean>>>(),
+    );
+    so(
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+      // @ts-expect-error: 2nd input type is wrong
+      testValue<Handle<Box<symbol>>>(),
+    );
+    // @ts-expect-error: insufficient args
+    so(
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+    );
+    so(
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
+      // @ts-expect-error: excessive args
+      // deno-lint-ignore no-explicit-any
+      testValue<Handle<Box<any>>>(),
+    );
+    so(
+      testValue<Handle<Box<number>>>(),
+      // @ts-expect-error: args swapped
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<string>>>(),
+    );
+
+    // mo: NG
+    mo(
+      // @ts-expect-error: 1st output type is wrong
+      [testValue<Handle<Box<symbol>>>(), testValue<Handle<Box<string>>>()],
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<bigint>>>(),
+    );
+    mo(
+      // @ts-expect-error: 2st output type is wrong
+      [testValue<Handle<Box<number>>>(), testValue<Handle<Box<symbol>>>()],
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<bigint>>>(),
+    );
+    mo(
+      [testValue<Handle<Box<number>>>(), testValue<Handle<Box<string>>>()],
+      // @ts-expect-error: 1st input type is wrong
+      testValue<Handle<Box<symbol>>>(),
+      testValue<Handle<Box<bigint>>>(),
+    );
+    mo(
+      [testValue<Handle<Box<number>>>(), testValue<Handle<Box<string>>>()],
+      testValue<Handle<Box<boolean>>>(),
+      // @ts-expect-error: 2nd input type is wrong
+      testValue<Handle<Box<symbol>>>(),
+    );
+    mo(
+      // @ts-expect-error: insufficient output args
+      [testValue<Handle<Box<number>>>()],
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<bigint>>>(),
+    );
+    // @ts-expect-error: insufficient input args
+    mo(
+      [testValue<Handle<Box<number>>>(), testValue<Handle<Box<string>>>()],
+      testValue<Handle<Box<boolean>>>(),
+    );
+    mo(
+      // @ts-expect-error: excessive output args
+      [
+        testValue<Handle<Box<number>>>(),
+        testValue<Handle<Box<string>>>(),
+        // deno-lint-ignore no-explicit-any
+        testValue<Handle<Box<any>>>(),
+      ],
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<bigint>>>(),
+    );
+    mo(
+      [testValue<Handle<Box<number>>>(), testValue<Handle<Box<string>>>()],
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<bigint>>>(),
+      // @ts-expect-error: excessive input args
+      // deno-lint-ignore no-explicit-any
+      testValue<Handle<Box<any>>>(),
+    );
+    mo(
+      // @ts-expect-error: output args swapped
+      [testValue<Handle<Box<string>>>(), testValue<Handle<Box<number>>>()],
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<bigint>>>(),
+    );
+    mo(
+      [testValue<Handle<Box<number>>>(), testValue<Handle<Box<string>>>()],
+      // @ts-expect-error: input args swapped
+      testValue<Handle<Box<bigint>>>(),
+      testValue<Handle<Box<boolean>>>(),
+    );
+
+    // sop: NG
+    sop(
+      // @ts-expect-error: 1st input type is wrong
+      testValue<Handle<Box<symbol>>>(),
+      testValue<Handle<Box<boolean>>>(),
+    );
+    sop(
+      testValue<Handle<Box<string>>>(),
+      // @ts-expect-error: 2nd input type is wrong
+      testValue<Handle<Box<symbol>>>(),
+    );
+    // @ts-expect-error: insufficient input args
+    sop(
+      testValue<Handle<Box<string>>>(),
+    );
+    sop(
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
+      // @ts-expect-error: excessive input args
+      // deno-lint-ignore no-explicit-any
+      testValue<Handle<Box<any>>>(),
+    );
+
+    // mop: NG
+    mop(
+      // @ts-expect-error: 1st input type is wrong
+      testValue<Handle<Box<symbol>>>(),
+      testValue<Handle<Box<bigint>>>(),
+    );
+    mop(
+      testValue<Handle<Box<boolean>>>(),
+      // @ts-expect-error: 2nd input type is wrong
+      testValue<Handle<Box<symbol>>>(),
+    );
+    // @ts-expect-error: insufficient input args
+    mop(
+      testValue<Handle<Box<boolean>>>(),
+    );
+    mop(
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<bigint>>>(),
+      // @ts-expect-error: excessive input args
+      // deno-lint-ignore no-explicit-any
+      testValue<Handle<Box<any>>>(),
+    );
+  });
 });

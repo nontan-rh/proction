@@ -14,7 +14,7 @@ const parentPlanKey = Symbol("parentPlan");
 const handleIdKey = Symbol("handleId");
 const phantomDataKey = Symbol("phantomData");
 type HandleId = Brand<number, "handleID">;
-type Handle<T> = {
+export type Handle<T> = {
   [parentPlanKey]: Plan;
   [handleIdKey]: HandleId;
   [phantomDataKey]: () => T;

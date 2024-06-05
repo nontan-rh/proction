@@ -8,4 +8,9 @@ export {
   pipeBoxRW,
 } from "./pipebox.ts";
 export { Pool } from "./pool.ts";
-export { assertIsChildTypeOf, ChildType, ParentType } from "./types.ts";
+export {
+  assertIsChildTypeOf,
+  type ChildType,
+  type ParentType,
+  testValue,
+} from "./types.ts";
