@@ -4,6 +4,7 @@ import {
   assertGreater,
   assertGreaterOrEqual,
   assertThrows,
+  delay,
 } from "./deps.ts";
 import {
   AllocatorResult,
@@ -304,6 +305,65 @@ Deno.test(async function calcIO() {
 
   assertEquals(result1R.getValue(), 26);
   assertEquals(result2RW.getValue(), 105);
+  assertEquals(boxedNumberPool.acquiredCount, 0);
+  assertGreater(boxedNumberPool.pooledCount, 0);
+  assertEquals(boxedNumberPool.taintedCount, 0);
+  assertFalse(errorReported);
+});
+
+Deno.test(async function asyncCalc() {
+  let errorReported = false;
+
+  const boxedNumberPool = new Pool<Box<number>, []>(
+    () => new Box<number>(),
+    (x) => x.clear(),
+    (e) => {
+      errorReported = true;
+      console.error(e);
+    },
+  );
+  const boxedNumberProvider = new ProviderWrap(boxedNumberPool);
+
+  const add = singleOutputAction(
+    async function addBody(
+      result: Box<number>,
+      l: Box<number>,
+      r: Box<number>,
+    ) {
+      await delay(Math.min(l.value, r.value));
+      result.value = l.value + r.value;
+    },
+  );
+  const pureAdd = singleOutputPurify(add, () => boxedNumberProvider.acquire());
+  const mul = singleOutputAction(
+    async function mulBody(
+      result: Box<number>,
+      l: Box<number>,
+      r: Box<number>,
+    ) {
+      await delay(Math.min(l.value, r.value));
+      result.value = l.value * r.value;
+    },
+  );
+  const pureMul = singleOutputPurify(mul, () => boxedNumberProvider.acquire());
+
+  const resultBody = new Box<number>();
+
+  await new Context(contextOptions).run(({ source, sink }) => {
+    const result = sink(resultBody);
+    const result1 = pureAdd(
+      source(Box.withValue(1)),
+      source(Box.withValue(2)),
+    );
+    const result2 = pureAdd(
+      source(Box.withValue(3)),
+      source(Box.withValue(4)),
+    );
+    const result3 = pureMul(result1, result2);
+    add(result, result3, source(Box.withValue(5)));
+  });
+
+  assertEquals(resultBody.value, 26);
   assertEquals(boxedNumberPool.acquiredCount, 0);
   assertGreater(boxedNumberPool.pooledCount, 0);
   assertEquals(boxedNumberPool.taintedCount, 0);
