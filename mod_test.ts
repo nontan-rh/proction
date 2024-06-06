@@ -47,13 +47,15 @@ Deno.test(async function calc() {
   const boxedNumberProvider = new ProviderWrap(boxedNumberPool);
 
   const add = singleOutputAction(
-    (result: Box<number>, l: Box<number>, r: Box<number>) =>
-      result.value = l.value + r.value,
+    (result: Box<number>, l: Box<number>, r: Box<number>) => {
+      result.value = l.value + r.value;
+    },
   );
   const pureAdd = singleOutputPurify(add, () => boxedNumberProvider.acquire());
   const mul = singleOutputAction(
-    (result: Box<number>, l: Box<number>, r: Box<number>) =>
-      result.value = l.value * r.value,
+    (result: Box<number>, l: Box<number>, r: Box<number>) => {
+      result.value = l.value * r.value;
+    },
   );
   const pureMul = singleOutputPurify(mul, () => boxedNumberProvider.acquire());
 
@@ -119,8 +121,9 @@ Deno.test(async function twoOutputs(t) {
     () => boxedNumberProvider.acquire(),
   ]);
   const add = singleOutputAction(
-    (result: Box<number>, l: Box<number>, r: Box<number>) =>
-      result.value = l.value + r.value,
+    (result: Box<number>, l: Box<number>, r: Box<number>) => {
+      result.value = l.value + r.value;
+    },
   );
 
   await t.step(async function bothOutputsAreGlobal() {
@@ -177,13 +180,15 @@ Deno.test(async function outputUsage(t) {
   }
 
   const add = singleOutputAction(
-    (result: Box<number>, l: Box<number>, r: Box<number>) =>
-      result.value = l.value + r.value,
+    (result: Box<number>, l: Box<number>, r: Box<number>) => {
+      result.value = l.value + r.value;
+    },
   );
   const pureAdd = singleOutputPurify(add, () => boxedNumberProvider.acquire());
   const mul = singleOutputAction(
-    (result: Box<number>, l: Box<number>, r: Box<number>) =>
-      result.value = l.value * r.value,
+    (result: Box<number>, l: Box<number>, r: Box<number>) => {
+      result.value = l.value * r.value;
+    },
   );
   const pureMul = singleOutputPurify(mul, () => boxedNumberProvider.acquire());
 

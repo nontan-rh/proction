@@ -71,7 +71,7 @@ export function singleOutputAction<
   O,
   I extends readonly unknown[],
 >(
-  f: (output: O, ...inputs: I) => unknown,
+  f: (output: O, ...inputs: I) => void | Promise<void>,
 ): (
   output: Handle<O>,
   ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
@@ -105,7 +105,7 @@ export function multipleOutputAction<
   O extends readonly unknown[],
   I extends readonly unknown[],
 >(
-  f: (outputs: O, ...inputs: I) => unknown,
+  f: (outputs: O, ...inputs: I) => void | Promise<void>,
 ): (
   outputs: { [key in keyof O]: Handle<O[key]> } // expanded for readability of inferred type
   ,
