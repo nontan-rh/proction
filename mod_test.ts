@@ -370,6 +370,70 @@ Deno.test(async function asyncCalc() {
   assertFalse(errorReported);
 });
 
+Deno.test(async function middleware(t) {
+  const addLog: string[] = [];
+  const add = singleOutputAction(
+    function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
+      result.value = l.value + r.value;
+    },
+    [async (next) => {
+      addLog.push("1 before");
+      await next();
+      addLog.push("1 after");
+    }, async (next) => {
+      addLog.push("2 before");
+      await next();
+      addLog.push("2 after");
+    }],
+  );
+  const divmodLog: string[] = [];
+  const divmod = multipleOutputAction(
+    function divmodBody(
+      [div, mod]: [Box<number>, Box<number>],
+      l: Box<number>,
+      r: Box<number>,
+    ) {
+      div.value = Math.floor(l.value / r.value);
+      mod.value = l.value % r.value;
+    },
+    [async (next) => {
+      divmodLog.push("1 before");
+      await next();
+      divmodLog.push("1 after");
+    }, async (next) => {
+      divmodLog.push("2 before");
+      await next();
+      divmodLog.push("2 after");
+    }],
+  );
+
+  await t.step(async function single() {
+    const output = new Box<number>();
+    await new Context(contextOptions).run(({ source, sink }) => {
+      const input1 = source(Box.withValue(42));
+      const input2 = source(Box.withValue(5));
+
+      add(sink(output), input1, input2);
+    });
+    assertEquals(output.value, 47);
+    assertEquals(addLog, ["1 before", "2 before", "2 after", "1 after"]);
+  });
+
+  await t.step(async function multiple() {
+    const output1 = new Box<number>();
+    const output2 = new Box<number>();
+    await new Context(contextOptions).run(({ source, sink }) => {
+      const input1 = source(Box.withValue(42));
+      const input2 = source(Box.withValue(5));
+
+      divmod([sink(output1), sink(output2)], input1, input2);
+    });
+    assertEquals(output1.value, 8);
+    assertEquals(output2.value, 2);
+    assertEquals(divmodLog, ["1 before", "2 before", "2 after", "1 after"]);
+  });
+});
+
 Deno.test(function types() {
   const so = singleOutputAction(
     function soBody(_x: Box<number>, _a: Box<string>, _b: Box<boolean>) {},
