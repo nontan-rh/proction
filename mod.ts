@@ -213,17 +213,13 @@ export class Context {
     const mergedOptions = { ...defaultContextOptions, ...options };
 
     const reportError = mergedOptions.reportError;
-    if (reportError != null) {
-      mergedOptions.reportError = (e) => {
-        if (reportError != null) {
-          try {
-            reportError(e);
-          } catch {
-            // no recovery
-          }
-        }
-      };
-    }
+    mergedOptions.reportError = (e) => {
+      try {
+        reportError(e);
+      } catch {
+        // no recovery
+      }
+    };
 
     this[contextOptionsKey] = mergedOptions;
   }
