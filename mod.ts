@@ -476,10 +476,10 @@ function prepareInvocations(
 
   for (const handleId of plan[internalPlanKey].dataSlots.keys()) {
     const dataSlot = plan[internalPlanKey].dataSlots.get(handleId);
-    if (
-      dataSlot == null ||
-      (dataSlot.type !== "sink" && dataSlot.type !== "intermediate")
-    ) {
+    if (dataSlot == null) {
+      throw new LogicError(`data slot not found for handle: ${handleId}`);
+    }
+    if (dataSlot.type !== "sink" && dataSlot.type !== "intermediate") {
       continue;
     }
     visitHandle(handleId);
