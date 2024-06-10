@@ -67,11 +67,15 @@ export function getPlan(
   return plan;
 }
 
+type InvocationBody = () => Promise<void>;
+export type Middleware = (next: () => Promise<void>) => Promise<void>;
+
 export function singleOutputAction<
   O,
   I extends readonly unknown[],
 >(
   f: (output: O, ...inputs: I) => void | Promise<void>,
+  m?: Middleware[],
 ): (
   output: Handle<O>,
   ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
@@ -94,6 +98,7 @@ export function singleOutputAction<
         decRefArray(plan, inputs);
         decRef(plan, output);
       },
+      middlewares: m ? m : [],
       // calculated on run preparation
       next: [],
       numBlockers: 0,
@@ -110,6 +115,7 @@ export function multipleOutputAction<
   I extends readonly unknown[],
 >(
   f: (outputs: O, ...inputs: I) => void | Promise<void>,
+  m?: Middleware[],
 ): (
   outputs: { [key in keyof O]: Handle<O[key]> } // expanded for readability of inferred type
   ,
@@ -133,6 +139,7 @@ export function multipleOutputAction<
         decRefArray(plan, inputs);
         decRefArray(plan, outputs);
       },
+      middlewares: m ? m : [],
       // calculated on run preparation
       next: [],
       numBlockers: 0,
@@ -210,6 +217,7 @@ interface Invocation {
   readonly inputs: readonly UntypedHandle[];
   readonly outputs: readonly UntypedHandle[];
   readonly run: () => Promise<void>;
+  readonly middlewares: Middleware[];
   readonly next: Invocation[];
   numBlockers: number;
   numResolvedBlockers: number;
@@ -420,8 +428,9 @@ async function run(
         continue;
       }
 
+      const run = applyMiddleware(invocation.run, invocation.middlewares);
       runningInvocations.add(invocation.id);
-      invocation.run().then(() => {
+      run().then(() => {
         for (const next of invocation.next) {
           if (next.numResolvedBlockers >= next.numBlockers) {
             throw new LogicError("the invocation is resolved twice");
@@ -651,4 +660,11 @@ function assertNoLeak(plan: Plan) {
         return unreachable(type);
     }
   }
+}
+
+function applyMiddleware(
+  body: InvocationBody,
+  middlewares: Middleware[],
+): InvocationBody {
+  return middlewares.reduceRight<InvocationBody>((f, m) => () => m(f), body);
 }
