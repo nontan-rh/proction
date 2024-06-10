@@ -94,6 +94,10 @@ export function singleOutputAction<
         decRefArray(plan, inputs);
         decRef(plan, output);
       },
+      // calculated on run preparation
+      next: [],
+      numBlockers: 0,
+      numResolvedBlockers: 0,
     };
     plan[internalPlanKey].invocations.set(invocation.id, invocation);
   };
@@ -129,6 +133,10 @@ export function multipleOutputAction<
         decRefArray(plan, inputs);
         decRefArray(plan, outputs);
       },
+      // calculated on run preparation
+      next: [],
+      numBlockers: 0,
+      numResolvedBlockers: 0,
     };
     plan[internalPlanKey].invocations.set(invocation.id, invocation);
   };
@@ -202,6 +210,9 @@ interface Invocation {
   readonly inputs: readonly UntypedHandle[];
   readonly outputs: readonly UntypedHandle[];
   readonly run: () => Promise<void>;
+  readonly next: Invocation[];
+  numBlockers: number;
+  numResolvedBlockers: number;
 }
 
 const contextOptionsKey = Symbol("contextOptions");
@@ -387,13 +398,49 @@ async function run(
   try {
     plan[internalPlanKey].state = "planning";
 
-    const invocations = prepareInvocations(plan);
-    prepareDataSlots(plan, invocations);
+    const runningInvocations = new Set<InvocationID>();
+    const freeInvocations = prepareInvocations(plan);
+    prepareDataSlots(plan);
 
     plan[internalPlanKey].state = "running";
 
-    for (const invocation of invocations) {
-      await invocation.run();
+    // condvar is for runningInvocations and freeInvocations
+    let { promise: condvar, resolve: notify } = Promise.withResolvers<void>();
+
+    while (true) {
+      const invocation = freeInvocations.shift();
+      if (invocation == null) {
+        if (runningInvocations.size === 0) {
+          break;
+        }
+
+        await condvar;
+        ({ promise: condvar, resolve: notify } = Promise.withResolvers<void>());
+
+        continue;
+      }
+
+      runningInvocations.add(invocation.id);
+      invocation.run().then(() => {
+        for (const next of invocation.next) {
+          if (next.numResolvedBlockers >= next.numBlockers) {
+            throw new LogicError("the invocation is resolved twice");
+          }
+
+          next.numResolvedBlockers++;
+          if (next.numResolvedBlockers >= next.numBlockers) {
+            freeInvocations.push(next);
+          }
+        }
+
+        runningInvocations.delete(invocation.id);
+
+        notify();
+      }, (_: unknown) => {
+        runningInvocations.delete(invocation.id);
+
+        notify();
+      });
     }
 
     if (plan.context[contextOptionsKey].assertNoLeak) {
@@ -411,9 +458,7 @@ async function run(
 function prepareInvocations(
   plan: Plan,
 ): Invocation[] {
-  type ToposortState = "temporary" | "permanent";
-
-  const result: Invocation[] = [];
+  const freeInvocations: Invocation[] = [];
 
   const outputToInvocation = new Map<HandleId, Invocation>();
   for (const invocation of plan[internalPlanKey].invocations.values()) {
@@ -427,72 +472,32 @@ function prepareInvocations(
     }
   }
 
-  const visitedInvocations = new Map<InvocationID, ToposortState>();
-  function visitInvocation(invocation: Invocation): void {
-    const invocationID = invocation.id;
-
-    const state = visitedInvocations.get(invocationID);
-    if (state === "permanent") {
-      return;
-    } else if (state === "temporary") {
-      throw new LogicError("the computation graph has a cycle");
-    }
-
-    visitedInvocations.set(invocationID, "temporary");
-
+  for (const invocation of plan[internalPlanKey].invocations.values()) {
     for (const input of invocation.inputs) {
-      visitHandle(input[handleIdKey]);
-    }
-
-    visitedInvocations.set(invocationID, "permanent");
-
-    result.unshift(invocation);
-  }
-
-  function visitHandle(handleId: HandleId): void {
-    const dataSlot = plan[internalPlanKey].dataSlots.get(handleId);
-    if (dataSlot != null) {
-      const type = dataSlot.type;
-      switch (type) {
-        case "source":
-          return;
-        case "intermediate":
-        case "sink":
-          break;
-        default:
-          return unreachable(type);
+      const parentInvocation = outputToInvocation.get(input[handleIdKey]);
+      if (parentInvocation == null) {
+        continue;
       }
-    }
+      // Input of the invocation depends on its parent invocation
 
-    const parentInvocation = outputToInvocation.get(handleId);
-    if (parentInvocation == null) {
-      throw new LogicError(
-        `parent invocation not found for handle: ${handleId}`,
-      );
+      parentInvocation.next.push(invocation); // allow duplication for proper counting
+      invocation.numBlockers++;
     }
-
-    visitInvocation(parentInvocation);
   }
 
-  for (const handleId of plan[internalPlanKey].dataSlots.keys()) {
-    const dataSlot = plan[internalPlanKey].dataSlots.get(handleId);
-    if (dataSlot == null) {
-      throw new LogicError(`data slot not found for handle: ${handleId}`);
+  for (const invocation of plan[internalPlanKey].invocations.values()) {
+    if (invocation.numBlockers === 0) {
+      freeInvocations.push(invocation);
     }
-    if (dataSlot.type !== "sink" && dataSlot.type !== "intermediate") {
-      continue;
-    }
-    visitHandle(handleId);
   }
 
-  return result.reverse();
+  return freeInvocations;
 }
 
 function prepareDataSlots(
   plan: Plan,
-  invocations: Invocation[],
 ): void {
-  for (const invocation of invocations) {
+  for (const invocation of plan[internalPlanKey].invocations.values()) {
     // reserve intermediate inputs
     for (const input of invocation.inputs) {
       const dataSlot = plan[internalPlanKey].dataSlots.get(
