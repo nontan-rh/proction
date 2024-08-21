@@ -9,7 +9,7 @@ jobs:
   check:
     strategy:
       matrix:
-        deno-version: [v1.x, v1.44]
+        deno-version: [v1.x, v1.45]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
