@@ -11,11 +11,11 @@ import {
   Context,
   ContextOptions,
   Handle,
-  multipleOutputAction,
-  multipleOutputPurify,
+  proction,
+  proctionN,
   ProviderWrap,
-  singleOutputAction,
-  singleOutputPurify,
+  purify,
+  purifyN,
 } from "./mod.ts";
 import { Pool } from "./_testutils/pool.ts";
 import { Box } from "./_testutils/box.ts";
@@ -47,18 +47,18 @@ Deno.test(async function calc() {
   );
   const boxedNumberProvider = new ProviderWrap(boxedNumberPool);
 
-  const add = singleOutputAction()(
+  const add = proction()(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value + r.value;
     },
   );
-  const pureAdd = singleOutputPurify(add, () => boxedNumberProvider.acquire());
-  const mul = singleOutputAction()(
+  const pureAdd = purify(add, () => boxedNumberProvider.acquire());
+  const mul = proction()(
     function mulBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value * r.value;
     },
   );
-  const pureMul = singleOutputPurify(mul, () => boxedNumberProvider.acquire());
+  const pureMul = purify(mul, () => boxedNumberProvider.acquire());
 
   const resultBody = new Box<number>();
 
@@ -107,7 +107,7 @@ Deno.test(async function twoOutputs(t) {
     assertFalse(errorReported);
   }
 
-  const divmod = multipleOutputAction()(
+  const divmod = proctionN()(
     function divmodBody(
       [div, mod]: [Box<number>, Box<number>],
       l: Box<number>,
@@ -117,11 +117,11 @@ Deno.test(async function twoOutputs(t) {
       mod.value = l.value % r.value;
     },
   );
-  const pureDivmod = multipleOutputPurify(divmod, [
+  const pureDivmod = purifyN(divmod, [
     () => boxedNumberProvider.acquire(),
     () => boxedNumberProvider.acquire(),
   ]);
-  const add = singleOutputAction()(
+  const add = proction()(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value + r.value;
     },
@@ -180,18 +180,18 @@ Deno.test(async function outputUsage(t) {
     assertFalse(errorReported);
   }
 
-  const add = singleOutputAction()(
+  const add = proction()(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value + r.value;
     },
   );
-  const pureAdd = singleOutputPurify(add, () => boxedNumberProvider.acquire());
-  const mul = singleOutputAction()(
+  const pureAdd = purify(add, () => boxedNumberProvider.acquire());
+  const mul = proction()(
     function mulBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value * r.value;
     },
   );
-  const pureMul = singleOutputPurify(mul, () => boxedNumberProvider.acquire());
+  const pureMul = purify(mul, () => boxedNumberProvider.acquire());
 
   await t.step(async function noOutputsAreUsed() {
     await new Context(contextOptions).run(({ source }) => {
@@ -257,7 +257,7 @@ Deno.test(async function calcIO() {
   );
   const boxedNumberProvider = new ProviderWrap(boxedNumberPool);
 
-  const add = singleOutputAction()(
+  const add = proction()(
     function addBody(
       result: IPipeBoxW<number>,
       l: IPipeBoxR<number>,
@@ -266,8 +266,8 @@ Deno.test(async function calcIO() {
       result.setValue(l.getValue() + r.getValue());
     },
   );
-  const pureAdd = singleOutputPurify(add, () => boxedNumberProvider.acquire());
-  const mul = singleOutputAction()(
+  const pureAdd = purify(add, () => boxedNumberProvider.acquire());
+  const mul = proction()(
     function mulBody(
       result: IPipeBoxW<number>,
       l: IPipeBoxR<number>,
@@ -276,7 +276,7 @@ Deno.test(async function calcIO() {
       result.setValue(l.getValue() * r.getValue());
     },
   );
-  const pureMul = singleOutputPurify(mul, () => boxedNumberProvider.acquire());
+  const pureMul = purify(mul, () => boxedNumberProvider.acquire());
 
   const [input1R, input1W] = pipeBox<number>();
   input1W.setValue(1);
@@ -324,7 +324,7 @@ Deno.test(async function asyncCalc() {
   );
   const boxedNumberProvider = new ProviderWrap(boxedNumberPool);
 
-  const add = singleOutputAction()(
+  const add = proction()(
     async function addBody(
       result: Box<number>,
       l: Box<number>,
@@ -334,8 +334,8 @@ Deno.test(async function asyncCalc() {
       result.value = l.value + r.value;
     },
   );
-  const pureAdd = singleOutputPurify(add, () => boxedNumberProvider.acquire());
-  const mul = singleOutputAction()(
+  const pureAdd = purify(add, () => boxedNumberProvider.acquire());
+  const mul = proction()(
     async function mulBody(
       result: Box<number>,
       l: Box<number>,
@@ -345,7 +345,7 @@ Deno.test(async function asyncCalc() {
       result.value = l.value * r.value;
     },
   );
-  const pureMul = singleOutputPurify(mul, () => boxedNumberProvider.acquire());
+  const pureMul = purify(mul, () => boxedNumberProvider.acquire());
 
   const resultBody = new Box<number>();
 
@@ -372,7 +372,7 @@ Deno.test(async function asyncCalc() {
 
 Deno.test(async function middleware(t) {
   const addLog: string[] = [];
-  const add = singleOutputAction({
+  const add = proction({
     middlewares: [async (next) => {
       addLog.push("1 before");
       await next();
@@ -388,7 +388,7 @@ Deno.test(async function middleware(t) {
     },
   );
   const divmodLog: string[] = [];
-  const divmod = multipleOutputAction({
+  const divmod = proctionN({
     middlewares: [async (next) => {
       divmodLog.push("1 before");
       await next();
@@ -437,22 +437,22 @@ Deno.test(async function middleware(t) {
 });
 
 Deno.test(function types() {
-  const so = singleOutputAction()(
+  const so = proction()(
     function soBody(_x: Box<number>, _a: Box<string>, _b: Box<boolean>) {},
   );
-  const mo = multipleOutputAction()(
+  const mo = proctionN()(
     function moBody(
       [_x, _y]: [Box<number>, Box<string>],
       _a: Box<boolean>,
       _b: Box<bigint>,
     ) {},
   );
-  const sop = singleOutputPurify(
+  const sop = purify(
     so,
     (_a: Box<string>, _b: Box<boolean>) =>
       testValue<AllocatorResult<Box<number>>>(),
   );
-  const mop = multipleOutputPurify(mo, [
+  const mop = purifyN(mo, [
     (_a: Box<boolean>, _b: Box<bigint>) =>
       testValue<AllocatorResult<Box<number>>>(),
     (_a: Box<boolean>, _b: Box<bigint>) =>

@@ -74,7 +74,7 @@ type ActionOptions = {
   middlewares?: Middleware[];
 };
 
-export function singleOutputAction(
+export function proction(
   actionOptions?: ActionOptions,
 ): <O, I extends readonly unknown[]>(
   f: (output: O, ...inputs: I) => void | Promise<void>,
@@ -126,7 +126,7 @@ export function singleOutputAction(
   };
 }
 
-export function multipleOutputAction(
+export function proctionN(
   actionOptions?: ActionOptions,
 ): <
   O extends readonly unknown[],
@@ -181,7 +181,7 @@ export function multipleOutputAction(
   };
 }
 
-export function singleOutputPurify<
+export function purify<
   O,
   I extends readonly UntypedHandle[],
   A extends O,
@@ -205,7 +205,7 @@ export function singleOutputPurify<
   };
 }
 
-export function multipleOutputPurify<
+export function purifyN<
   O extends readonly unknown[],
   I extends readonly UntypedHandle[],
   A extends O,
