@@ -47,13 +47,13 @@ Deno.test(async function calc() {
   );
   const boxedNumberProvider = new ProviderWrap(boxedNumberPool);
 
-  const add = singleOutputAction(
+  const add = singleOutputAction()(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value + r.value;
     },
   );
   const pureAdd = singleOutputPurify(add, () => boxedNumberProvider.acquire());
-  const mul = singleOutputAction(
+  const mul = singleOutputAction()(
     function mulBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value * r.value;
     },
@@ -107,7 +107,7 @@ Deno.test(async function twoOutputs(t) {
     assertFalse(errorReported);
   }
 
-  const divmod = multipleOutputAction(
+  const divmod = multipleOutputAction()(
     function divmodBody(
       [div, mod]: [Box<number>, Box<number>],
       l: Box<number>,
@@ -121,7 +121,7 @@ Deno.test(async function twoOutputs(t) {
     () => boxedNumberProvider.acquire(),
     () => boxedNumberProvider.acquire(),
   ]);
-  const add = singleOutputAction(
+  const add = singleOutputAction()(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value + r.value;
     },
@@ -180,13 +180,13 @@ Deno.test(async function outputUsage(t) {
     assertFalse(errorReported);
   }
 
-  const add = singleOutputAction(
+  const add = singleOutputAction()(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value + r.value;
     },
   );
   const pureAdd = singleOutputPurify(add, () => boxedNumberProvider.acquire());
-  const mul = singleOutputAction(
+  const mul = singleOutputAction()(
     function mulBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value * r.value;
     },
@@ -257,7 +257,7 @@ Deno.test(async function calcIO() {
   );
   const boxedNumberProvider = new ProviderWrap(boxedNumberPool);
 
-  const add = singleOutputAction(
+  const add = singleOutputAction()(
     function addBody(
       result: IPipeBoxW<number>,
       l: IPipeBoxR<number>,
@@ -267,7 +267,7 @@ Deno.test(async function calcIO() {
     },
   );
   const pureAdd = singleOutputPurify(add, () => boxedNumberProvider.acquire());
-  const mul = singleOutputAction(
+  const mul = singleOutputAction()(
     function mulBody(
       result: IPipeBoxW<number>,
       l: IPipeBoxR<number>,
@@ -324,7 +324,7 @@ Deno.test(async function asyncCalc() {
   );
   const boxedNumberProvider = new ProviderWrap(boxedNumberPool);
 
-  const add = singleOutputAction(
+  const add = singleOutputAction()(
     async function addBody(
       result: Box<number>,
       l: Box<number>,
@@ -335,7 +335,7 @@ Deno.test(async function asyncCalc() {
     },
   );
   const pureAdd = singleOutputPurify(add, () => boxedNumberProvider.acquire());
-  const mul = singleOutputAction(
+  const mul = singleOutputAction()(
     async function mulBody(
       result: Box<number>,
       l: Box<number>,
@@ -372,11 +372,8 @@ Deno.test(async function asyncCalc() {
 
 Deno.test(async function middleware(t) {
   const addLog: string[] = [];
-  const add = singleOutputAction(
-    function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
-      result.value = l.value + r.value;
-    },
-    [async (next) => {
+  const add = singleOutputAction({
+    middlewares: [async (next) => {
       addLog.push("1 before");
       await next();
       addLog.push("1 after");
@@ -385,18 +382,14 @@ Deno.test(async function middleware(t) {
       await next();
       addLog.push("2 after");
     }],
+  })(
+    function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
+      result.value = l.value + r.value;
+    },
   );
   const divmodLog: string[] = [];
-  const divmod = multipleOutputAction(
-    function divmodBody(
-      [div, mod]: [Box<number>, Box<number>],
-      l: Box<number>,
-      r: Box<number>,
-    ) {
-      div.value = Math.floor(l.value / r.value);
-      mod.value = l.value % r.value;
-    },
-    [async (next) => {
+  const divmod = multipleOutputAction({
+    middlewares: [async (next) => {
       divmodLog.push("1 before");
       await next();
       divmodLog.push("1 after");
@@ -405,6 +398,15 @@ Deno.test(async function middleware(t) {
       await next();
       divmodLog.push("2 after");
     }],
+  })(
+    function divmodBody(
+      [div, mod]: [Box<number>, Box<number>],
+      l: Box<number>,
+      r: Box<number>,
+    ) {
+      div.value = Math.floor(l.value / r.value);
+      mod.value = l.value % r.value;
+    },
   );
 
   await t.step(async function single() {
@@ -435,10 +437,10 @@ Deno.test(async function middleware(t) {
 });
 
 Deno.test(function types() {
-  const so = singleOutputAction(
+  const so = singleOutputAction()(
     function soBody(_x: Box<number>, _a: Box<string>, _b: Box<boolean>) {},
   );
-  const mo = multipleOutputAction(
+  const mo = multipleOutputAction()(
     function moBody(
       [_x, _y]: [Box<number>, Box<string>],
       _a: Box<boolean>,

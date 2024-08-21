@@ -70,85 +70,115 @@ export function getPlan(
 type InvocationBody = () => Promise<void>;
 export type Middleware = (next: () => Promise<void>) => Promise<void>;
 
-export function singleOutputAction<
-  O,
-  I extends readonly unknown[],
->(
+type ActionOptions = {
+  middlewares?: Middleware[];
+};
+
+export function singleOutputAction(
+  actionOptions?: ActionOptions,
+): <O, I extends readonly unknown[]>(
   f: (output: O, ...inputs: I) => void | Promise<void>,
-  m?: Middleware[],
-): (
+  decolatorContext?: DecoratorContext,
+) => (
   output: Handle<O>,
   ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => void {
-  const g = (
+  const middlewares = actionOptions?.middlewares ?? [];
+
+  return function decoratorFn<
+    O,
+    I extends readonly unknown[],
+  >(
+    f: (output: O, ...inputs: I) => void | Promise<void>,
+    _decoratorContext?: DecoratorContext,
+  ): (
     output: Handle<O>,
-    ...inputs: MappedHandleType<I>
-  ) => {
-    const plan = getPlan(output, ...inputs);
+    ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
+  ) => void {
+    const g = (
+      output: Handle<O>,
+      ...inputs: MappedHandleType<I>
+    ) => {
+      const plan = getPlan(output, ...inputs);
 
-    const id = plan[internalPlanKey].generateInvocationID();
-    const invocation: Invocation = {
-      id,
-      inputs,
-      outputs: [output],
-      run: async () => {
-        const restoredInputs = restoreInputs(plan, inputs);
-        const preparedOutputs = prepareOutput(plan, output);
-        await f(preparedOutputs, ...restoredInputs);
-        decRefArray(plan, inputs);
-        decRef(plan, output);
-      },
-      middlewares: m ? m : [],
-      // calculated on run preparation
-      next: [],
-      numBlockers: 0,
-      numResolvedBlockers: 0,
+      const id = plan[internalPlanKey].generateInvocationID();
+      const invocation: Invocation = {
+        id,
+        inputs,
+        outputs: [output],
+        run: async () => {
+          const restoredInputs = restoreInputs(plan, inputs);
+          const preparedOutputs = prepareOutput(plan, output);
+          await f(preparedOutputs, ...restoredInputs);
+          decRefArray(plan, inputs);
+          decRef(plan, output);
+        },
+        middlewares,
+        // calculated on run preparation
+        next: [],
+        numBlockers: 0,
+        numResolvedBlockers: 0,
+      };
+      plan[internalPlanKey].invocations.set(invocation.id, invocation);
     };
-    plan[internalPlanKey].invocations.set(invocation.id, invocation);
-  };
 
-  return g;
+    return g;
+  };
 }
 
-export function multipleOutputAction<
+export function multipleOutputAction(
+  actionOptions?: ActionOptions,
+): <
   O extends readonly unknown[],
   I extends readonly unknown[],
 >(
   f: (outputs: O, ...inputs: I) => void | Promise<void>,
-  m?: Middleware[],
-): (
-  outputs: { [key in keyof O]: Handle<O[key]> } // expanded for readability of inferred type
-  ,
+  decoratorContext?: DecoratorContext,
+) => (
+  outputs: { [key in keyof O]: Handle<O[key]> }, // expanded for readability of inferred type
   ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => void {
-  const g = (
-    outputs: MappedHandleType<O>,
-    ...inputs: MappedHandleType<I>
-  ) => {
-    const plan = getPlan(outputs, ...inputs);
+  const middlewares = actionOptions?.middlewares ?? [];
 
-    const id = plan[internalPlanKey].generateInvocationID();
-    const invocation: Invocation = {
-      id,
-      inputs,
-      outputs,
-      run: async () => {
-        const restoredInputs = restoreInputs(plan, inputs);
-        const preparedOutputs = prepareMultipleOutput(plan, outputs);
-        await f(preparedOutputs, ...restoredInputs);
-        decRefArray(plan, inputs);
-        decRefArray(plan, outputs);
-      },
-      middlewares: m ? m : [],
-      // calculated on run preparation
-      next: [],
-      numBlockers: 0,
-      numResolvedBlockers: 0,
+  return function decoratorFn<
+    O extends readonly unknown[],
+    I extends readonly unknown[],
+  >(
+    f: (outputs: O, ...inputs: I) => void | Promise<void>,
+    _decoratorContext?: DecoratorContext,
+  ): (
+    outputs: { [key in keyof O]: Handle<O[key]> }, // expanded for readability of inferred type
+    ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
+  ) => void {
+    const g = (
+      outputs: MappedHandleType<O>,
+      ...inputs: MappedHandleType<I>
+    ) => {
+      const plan = getPlan(outputs, ...inputs);
+
+      const id = plan[internalPlanKey].generateInvocationID();
+      const invocation: Invocation = {
+        id,
+        inputs,
+        outputs,
+        run: async () => {
+          const restoredInputs = restoreInputs(plan, inputs);
+          const preparedOutputs = prepareMultipleOutput(plan, outputs);
+          await f(preparedOutputs, ...restoredInputs);
+          decRefArray(plan, inputs);
+          decRefArray(plan, outputs);
+        },
+        middlewares,
+        // calculated on run preparation
+        next: [],
+        numBlockers: 0,
+        numResolvedBlockers: 0,
+      };
+      plan[internalPlanKey].invocations.set(invocation.id, invocation);
     };
-    plan[internalPlanKey].invocations.set(invocation.id, invocation);
-  };
 
-  return g;
+    return g;
+  };
 }
 
 export function singleOutputPurify<
