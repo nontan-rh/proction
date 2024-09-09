@@ -281,9 +281,9 @@ export class Context {
     };
     plan[internalPlanKey].plan = plan;
     const runParams: InnerContext = {
-      source: (value) => source(plan, value),
-      destination: (value) => destination(plan, value),
-      intermediate: (provide) => intermediate(plan, provide),
+      $s: (value) => source(plan, value),
+      $d: (value) => destination(plan, value),
+      $i: (provide) => intermediate(plan, provide),
     };
     bodyFn(runParams);
     await run(plan, options);
@@ -301,9 +301,9 @@ const defaultContextOptions: ContextOptions = {
 };
 
 type InnerContext = {
-  source<T extends object>(value: T): Handle<T>;
-  destination<T extends object>(value: T): Handle<T>;
-  intermediate<T>(provide: () => DisposableWrap<T>): Handle<T>;
+  $s<T extends object>(value: T): Handle<T>;
+  $d<T extends object>(value: T): Handle<T>;
+  $i<T>(provide: () => DisposableWrap<T>): Handle<T>;
 };
 
 const undefinedFn = () => {};

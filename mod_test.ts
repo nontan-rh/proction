@@ -96,18 +96,12 @@ Deno.test(async function calc() {
 
   const resultBody = new Box<number>();
 
-  await new Context(contextOptions).run(({ source, destination }) => {
-    const result = destination(resultBody);
-    const result1 = pureAdd(
-      source(Box.withValue(1)),
-      source(Box.withValue(2)),
-    );
-    const result2 = pureAdd(
-      source(Box.withValue(3)),
-      source(Box.withValue(4)),
-    );
+  await new Context(contextOptions).run(({ $s, $d }) => {
+    const result = $d(resultBody);
+    const result1 = pureAdd($s(Box.withValue(1)), $s(Box.withValue(2)));
+    const result2 = pureAdd($s(Box.withValue(3)), $s(Box.withValue(4)));
     const result3 = pureMul(result1, result2);
-    add(result, result3, source(Box.withValue(5)));
+    add(result, result3, $s(Box.withValue(5)));
   });
 
   assertEquals(resultBody.value, 26);
@@ -131,13 +125,10 @@ Deno.test(async function parameterizedAllocation() {
   );
 
   const resultBody = new Array(5);
-  await new Context(contextOptions).run(({ source, destination }) => {
-    const result = destination(resultBody);
-    const result1 = pureAdd(
-      source([1, 2, 3, 4, 5]),
-      source([10, 20, 30, 40, 50]),
-    );
-    add(result, result1, source([100, 200, 300, 400, 500]));
+  await new Context(contextOptions).run(({ $s, $d }) => {
+    const result = $d(resultBody);
+    const result1 = pureAdd($s([1, 2, 3, 4, 5]), $s([10, 20, 30, 40, 50]));
+    add(result, result1, $s([100, 200, 300, 400, 500]));
   });
 
   assertEquals(resultBody, [111, 222, 333, 444, 555]);
@@ -175,11 +166,11 @@ Deno.test(async function twoOutputs(t) {
     const divBody = new Box<number>();
     const modBody = new Box<number>();
 
-    await new Context(contextOptions).run(({ source, destination }) => {
-      const div = destination(divBody);
-      const mod = destination(modBody);
+    await new Context(contextOptions).run(({ $s, $d }) => {
+      const div = $d(divBody);
+      const mod = $d(modBody);
 
-      divmod([div, mod], source(Box.withValue(42)), source(Box.withValue(5)));
+      divmod([div, mod], $s(Box.withValue(42)), $s(Box.withValue(5)));
     });
 
     assertEquals(divBody.value, 8);
@@ -190,13 +181,10 @@ Deno.test(async function twoOutputs(t) {
   await t.step(async function modOutputIsIntermediate() {
     const resultBody = new Box<number>();
 
-    await new Context(contextOptions).run(({ source, destination }) => {
-      const result = destination(resultBody);
-      const [, mod] = pureDivmod(
-        source(Box.withValue(42)),
-        source(Box.withValue(5)),
-      );
-      add(result, mod, source(Box.withValue(100)));
+    await new Context(contextOptions).run(({ $s, $d }) => {
+      const result = $d(resultBody);
+      const [, mod] = pureDivmod($s(Box.withValue(42)), $s(Box.withValue(5)));
+      add(result, mod, $s(Box.withValue(100)));
     });
 
     assertEquals(resultBody.value, 102);
@@ -221,9 +209,9 @@ Deno.test(async function outputUsage(t) {
   const pureMul = purify(mul, () => testPool.provide());
 
   await t.step(async function noOutputsAreUsed() {
-    await new Context(contextOptions).run(({ source }) => {
-      const input1 = source(Box.withValue(42));
-      const input2 = source(Box.withValue(5));
+    await new Context(contextOptions).run(({ $s }) => {
+      const input1 = $s(Box.withValue(42));
+      const input2 = $s(Box.withValue(5));
 
       pureAdd(input1, input2);
       pureMul(input1, input2);
@@ -236,16 +224,13 @@ Deno.test(async function outputUsage(t) {
     const result1Body = new Box<number>();
     const result2Body = new Box<number>();
 
-    await new Context(contextOptions).run(({ source, destination }) => {
-      const result1 = destination(result1Body);
-      const result2 = destination(result2Body);
+    await new Context(contextOptions).run(({ $s, $d }) => {
+      const result1 = $d(result1Body);
+      const result2 = $d(result2Body);
 
-      const sum = pureAdd(
-        source(Box.withValue(42)),
-        source(Box.withValue(2)),
-      );
-      mul(result1, sum, source(Box.withValue(3)));
-      add(result2, sum, source(Box.withValue(4)));
+      const sum = pureAdd($s(Box.withValue(42)), $s(Box.withValue(2)));
+      mul(result1, sum, $s(Box.withValue(3)));
+      add(result2, sum, $s(Box.withValue(4)));
     });
 
     testPool.assertNoError();
@@ -257,12 +242,12 @@ Deno.test(async function outputUsage(t) {
     const sumBody = new Box<number>();
     const resultBody = new Box<number>();
 
-    await new Context(contextOptions).run(({ source, destination }) => {
-      const sum = destination(sumBody);
-      const result = destination(resultBody);
+    await new Context(contextOptions).run(({ $s, $d }) => {
+      const sum = $d(sumBody);
+      const result = $d(resultBody);
 
-      add(sum, source(Box.withValue(42)), source(Box.withValue(2)));
-      mul(result, sum, source(Box.withValue(3)));
+      add(sum, $s(Box.withValue(42)), $s(Box.withValue(2)));
+      mul(result, sum, $s(Box.withValue(3)));
     });
 
     testPool.assertNoError();
@@ -301,21 +286,15 @@ Deno.test(async function calcIO() {
   input2RW.setValue(2);
   const [result1R, result1W] = pipeBox<number>();
   const result2RW = pipeBoxRW<number>();
-  await new Context(contextOptions).run(({ source, destination }) => {
-    const result1Handle = destination(result1W);
-    const result2Handle = destination(result2RW);
+  await new Context(contextOptions).run(({ $s, $d }) => {
+    const result1Handle = $d(result1W);
+    const result2Handle = $d(result2RW);
 
-    const result1 = pureAdd(
-      source(input1R),
-      source(input2RW),
-    );
-    const result2 = pureAdd(
-      source(pipeBoxR(3)),
-      source(pipeBoxR(4)),
-    );
+    const result1 = pureAdd($s(input1R), $s(input2RW));
+    const result2 = pureAdd($s(pipeBoxR(3)), $s(pipeBoxR(4)));
     const result3 = pureMul(result1, result2);
 
-    const input5 = source(pipeBoxR(5));
+    const input5 = $s(pipeBoxR(5));
     add(result1Handle, result3, input5);
     mul(result2Handle, result3, input5);
   });
@@ -353,18 +332,12 @@ Deno.test(async function asyncCalc() {
 
   const resultBody = new Box<number>();
 
-  await new Context(contextOptions).run(({ source, destination }) => {
-    const result = destination(resultBody);
-    const result1 = pureAdd(
-      source(Box.withValue(1)),
-      source(Box.withValue(2)),
-    );
-    const result2 = pureAdd(
-      source(Box.withValue(3)),
-      source(Box.withValue(4)),
-    );
+  await new Context(contextOptions).run(({ $s, $d }) => {
+    const result = $d(resultBody);
+    const result1 = pureAdd($s(Box.withValue(1)), $s(Box.withValue(2)));
+    const result2 = pureAdd($s(Box.withValue(3)), $s(Box.withValue(4)));
     const result3 = pureMul(result1, result2);
-    add(result, result3, source(Box.withValue(5)));
+    add(result, result3, $s(Box.withValue(5)));
   });
 
   assertEquals(resultBody.value, 26);
@@ -412,11 +385,11 @@ Deno.test(async function middleware(t) {
 
   await t.step(async function single() {
     const output = new Box<number>();
-    await new Context(contextOptions).run(({ source, destination }) => {
-      const input1 = source(Box.withValue(42));
-      const input2 = source(Box.withValue(5));
+    await new Context(contextOptions).run(({ $s, $d }) => {
+      const input1 = $s(Box.withValue(42));
+      const input2 = $s(Box.withValue(5));
 
-      add(destination(output), input1, input2);
+      add($d(output), input1, input2);
     });
     assertEquals(output.value, 47);
     assertEquals(addLog, ["1 before", "2 before", "2 after", "1 after"]);
@@ -425,11 +398,11 @@ Deno.test(async function middleware(t) {
   await t.step(async function multiple() {
     const output1 = new Box<number>();
     const output2 = new Box<number>();
-    await new Context(contextOptions).run(({ source, destination }) => {
-      const input1 = source(Box.withValue(42));
-      const input2 = source(Box.withValue(5));
+    await new Context(contextOptions).run(({ $s, $d }) => {
+      const input1 = $s(Box.withValue(42));
+      const input2 = $s(Box.withValue(5));
 
-      divmod([destination(output1), destination(output2)], input1, input2);
+      divmod([$d(output1), $d(output2)], input1, input2);
     });
     assertEquals(output1.value, 8);
     assertEquals(output2.value, 2);
