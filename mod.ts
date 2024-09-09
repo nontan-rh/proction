@@ -451,7 +451,7 @@ async function run(
         continue;
       }
 
-      const run = applyMiddleware(invocation.run, invocation.middlewares);
+      const run = applyMiddlewares(invocation.run, invocation.middlewares);
       runningInvocations.add(invocation.id);
       run().then(() => {
         for (const next of invocation.next) {
@@ -685,7 +685,7 @@ function assertNoLeak(plan: Plan) {
   }
 }
 
-function applyMiddleware(
+function applyMiddlewares(
   body: InvocationBody,
   middlewares: Middleware[],
 ): InvocationBody {
