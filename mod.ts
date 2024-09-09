@@ -274,19 +274,19 @@ export class Context {
     this[contextOptionsKey] = mergedOptions;
   }
 
-  async run(bodyFn: (inner: InnerContext) => void, options?: RunOptions) {
+  async run(bodyFn: (runContext: RunContext) => void) {
     const plan: Plan = {
       context: this,
       [internalPlanKey]: new InternalPlan(this),
     };
     plan[internalPlanKey].plan = plan;
-    const runParams: InnerContext = {
+    const runContext: RunContext = {
       $s: (value) => source(plan, value),
       $d: (value) => destination(plan, value),
       $i: (provide) => intermediate(plan, provide),
     };
-    bodyFn(runParams);
-    await run(plan, options);
+    bodyFn(runContext);
+    await run(plan);
   }
 }
 
@@ -300,7 +300,7 @@ const defaultContextOptions: ContextOptions = {
   assertNoLeak: false,
 };
 
-type InnerContext = {
+type RunContext = {
   $s<T extends object>(value: T): Handle<T>;
   $d<T extends object>(value: T): Handle<T>;
   $i<T>(provide: () => DisposableWrap<T>): Handle<T>;
@@ -417,17 +417,9 @@ function intermediate<T>(
   return handle as Handle<T>;
 }
 
-// deno-lint-ignore ban-types
-export type RunOptions = {};
-
-const defaultRunOptions: RunOptions = {};
-
 async function run(
   plan: Plan,
-  options?: RunOptions,
 ): Promise<void> {
-  const _mergedOptions = { ...defaultRunOptions, ...options };
-
   if (plan[internalPlanKey].state !== "initial") {
     throw new PreconditionError(
       `invalid state precondition for run(): ${plan[internalPlanKey].state}`,
