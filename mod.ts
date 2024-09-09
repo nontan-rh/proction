@@ -282,7 +282,7 @@ export class Context {
     plan[internalPlanKey].plan = plan;
     const runParams: InnerContext = {
       source: (value) => source(plan, value),
-      sink: (value) => sink(plan, value),
+      destination: (value) => destination(plan, value),
       intermediate: (provide) => intermediate(plan, provide),
     };
     bodyFn(runParams);
@@ -302,7 +302,7 @@ const defaultContextOptions: ContextOptions = {
 
 type InnerContext = {
   source<T extends object>(value: T): Handle<T>;
-  sink<T extends object>(value: T): Handle<T>;
+  destination<T extends object>(value: T): Handle<T>;
   intermediate<T>(provide: () => DisposableWrap<T>): Handle<T>;
 };
 
@@ -347,14 +347,14 @@ type PlanState = "initial" | "planning" | "running" | "done" | "error";
 type DataSlot =
   | SourceSlot
   | IntermediateSlot
-  | SinkSlot;
+  | DestinationSlot;
 type SourceSlot = { type: "source"; body: unknown };
 type IntermediateSlot = {
   type: "intermediate";
   provide: () => DisposableWrap<unknown>;
   disposableWrapContainer: DelayedRc<DisposableWrap<unknown>>;
 };
-type SinkSlot = { type: "sink"; body: unknown };
+type DestinationSlot = { type: "destination"; body: unknown };
 
 function source<T extends object>(plan: Plan, value: T): Handle<T> {
   const cached = plan[internalPlanKey].inputCache.get(value);
@@ -378,7 +378,7 @@ function source<T extends object>(plan: Plan, value: T): Handle<T> {
   return handle as Handle<T>;
 }
 
-function sink<T extends object>(plan: Plan, value: T): Handle<T> {
+function destination<T extends object>(plan: Plan, value: T): Handle<T> {
   const cached = plan[internalPlanKey].outputCache.get(value);
   if (cached) {
     return cached as Handle<T>;
@@ -392,7 +392,7 @@ function sink<T extends object>(plan: Plan, value: T): Handle<T> {
   const handle = plan[internalPlanKey].generateHandle();
 
   plan[internalPlanKey].dataSlots.set(handle[handleIdKey], {
-    type: "sink",
+    type: "destination",
     body: value,
   });
   plan[internalPlanKey].outputCache.set(value, handle);
@@ -556,7 +556,7 @@ function prepareDataSlots(
         case "intermediate":
           dataSlot.disposableWrapContainer.incRef();
           break;
-        case "sink":
+        case "destination":
           break;
         default:
           return unreachable(type);
@@ -592,7 +592,7 @@ function restore<T>(plan: Plan, handle: Handle<T>): T {
     }
     case "intermediate":
       return dataSlot.disposableWrapContainer.managedObject.body as T;
-    case "sink": {
+    case "destination": {
       const body = dataSlot.body;
       return body as T;
     }
@@ -622,7 +622,7 @@ function decRef(plan: Plan, handle: UntypedHandle): void {
     case "intermediate":
       dataSlot.disposableWrapContainer.decRef();
       break;
-    case "sink":
+    case "destination":
       break;
     default:
       return unreachable(type);
@@ -647,7 +647,7 @@ function prepareOutput<T>(
       dataSlot.disposableWrapContainer.initialize(disposableWrap);
       return disposableWrap.body as T;
     }
-    case "sink": {
+    case "destination": {
       const body = dataSlot.body;
       return body as T;
     }
@@ -685,7 +685,7 @@ function assertNoLeak(plan: Plan) {
           );
         }
         break;
-      case "sink":
+      case "destination":
         break;
       default:
         return unreachable(type);

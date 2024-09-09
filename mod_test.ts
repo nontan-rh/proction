@@ -96,8 +96,8 @@ Deno.test(async function calc() {
 
   const resultBody = new Box<number>();
 
-  await new Context(contextOptions).run(({ source, sink }) => {
-    const result = sink(resultBody);
+  await new Context(contextOptions).run(({ source, destination }) => {
+    const result = destination(resultBody);
     const result1 = pureAdd(
       source(Box.withValue(1)),
       source(Box.withValue(2)),
@@ -131,8 +131,8 @@ Deno.test(async function parameterizedAllocation() {
   );
 
   const resultBody = new Array(5);
-  await new Context(contextOptions).run(({ source, sink }) => {
-    const result = sink(resultBody);
+  await new Context(contextOptions).run(({ source, destination }) => {
+    const result = destination(resultBody);
     const result1 = pureAdd(
       source([1, 2, 3, 4, 5]),
       source([10, 20, 30, 40, 50]),
@@ -175,9 +175,9 @@ Deno.test(async function twoOutputs(t) {
     const divBody = new Box<number>();
     const modBody = new Box<number>();
 
-    await new Context(contextOptions).run(({ source, sink }) => {
-      const div = sink(divBody);
-      const mod = sink(modBody);
+    await new Context(contextOptions).run(({ source, destination }) => {
+      const div = destination(divBody);
+      const mod = destination(modBody);
 
       divmod([div, mod], source(Box.withValue(42)), source(Box.withValue(5)));
     });
@@ -190,8 +190,8 @@ Deno.test(async function twoOutputs(t) {
   await t.step(async function modOutputIsIntermediate() {
     const resultBody = new Box<number>();
 
-    await new Context(contextOptions).run(({ source, sink }) => {
-      const result = sink(resultBody);
+    await new Context(contextOptions).run(({ source, destination }) => {
+      const result = destination(resultBody);
       const [, mod] = pureDivmod(
         source(Box.withValue(42)),
         source(Box.withValue(5)),
@@ -236,9 +236,9 @@ Deno.test(async function outputUsage(t) {
     const result1Body = new Box<number>();
     const result2Body = new Box<number>();
 
-    await new Context(contextOptions).run(({ source, sink }) => {
-      const result1 = sink(result1Body);
-      const result2 = sink(result2Body);
+    await new Context(contextOptions).run(({ source, destination }) => {
+      const result1 = destination(result1Body);
+      const result2 = destination(result2Body);
 
       const sum = pureAdd(
         source(Box.withValue(42)),
@@ -257,9 +257,9 @@ Deno.test(async function outputUsage(t) {
     const sumBody = new Box<number>();
     const resultBody = new Box<number>();
 
-    await new Context(contextOptions).run(({ source, sink }) => {
-      const sum = sink(sumBody);
-      const result = sink(resultBody);
+    await new Context(contextOptions).run(({ source, destination }) => {
+      const sum = destination(sumBody);
+      const result = destination(resultBody);
 
       add(sum, source(Box.withValue(42)), source(Box.withValue(2)));
       mul(result, sum, source(Box.withValue(3)));
@@ -301,9 +301,9 @@ Deno.test(async function calcIO() {
   input2RW.setValue(2);
   const [result1R, result1W] = pipeBox<number>();
   const result2RW = pipeBoxRW<number>();
-  await new Context(contextOptions).run(({ source, sink }) => {
-    const result1Handle = sink(result1W);
-    const result2Handle = sink(result2RW);
+  await new Context(contextOptions).run(({ source, destination }) => {
+    const result1Handle = destination(result1W);
+    const result2Handle = destination(result2RW);
 
     const result1 = pureAdd(
       source(input1R),
@@ -353,8 +353,8 @@ Deno.test(async function asyncCalc() {
 
   const resultBody = new Box<number>();
 
-  await new Context(contextOptions).run(({ source, sink }) => {
-    const result = sink(resultBody);
+  await new Context(contextOptions).run(({ source, destination }) => {
+    const result = destination(resultBody);
     const result1 = pureAdd(
       source(Box.withValue(1)),
       source(Box.withValue(2)),
@@ -412,11 +412,11 @@ Deno.test(async function middleware(t) {
 
   await t.step(async function single() {
     const output = new Box<number>();
-    await new Context(contextOptions).run(({ source, sink }) => {
+    await new Context(contextOptions).run(({ source, destination }) => {
       const input1 = source(Box.withValue(42));
       const input2 = source(Box.withValue(5));
 
-      add(sink(output), input1, input2);
+      add(destination(output), input1, input2);
     });
     assertEquals(output.value, 47);
     assertEquals(addLog, ["1 before", "2 before", "2 after", "1 after"]);
@@ -425,11 +425,11 @@ Deno.test(async function middleware(t) {
   await t.step(async function multiple() {
     const output1 = new Box<number>();
     const output2 = new Box<number>();
-    await new Context(contextOptions).run(({ source, sink }) => {
+    await new Context(contextOptions).run(({ source, destination }) => {
       const input1 = source(Box.withValue(42));
       const input2 = source(Box.withValue(5));
 
-      divmod([sink(output1), sink(output2)], input1, input2);
+      divmod([destination(output1), destination(output2)], input1, input2);
     });
     assertEquals(output1.value, 8);
     assertEquals(output2.value, 2);
