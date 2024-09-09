@@ -10,8 +10,8 @@ import {
   ContextOptions,
   DisposableWrap,
   Handle,
-  indirect,
-  indirectN,
+  makeIndirect,
+  makeIndirectN,
   Provide,
   provider,
   purify,
@@ -81,13 +81,13 @@ function createNumberPipeBoxTestPool(): TestPool<IPipeBoxRW<number>, []> {
 Deno.test(async function calc() {
   const testPool = createBoxedNumberTestPool();
 
-  const add = indirect()(
+  const add = makeIndirect()(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value + r.value;
     },
   );
   const pureAdd = purify(add, () => testPool.provide());
-  const mul = indirect()(
+  const mul = makeIndirect()(
     function mulBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value * r.value;
     },
@@ -111,7 +111,7 @@ Deno.test(async function calc() {
 Deno.test(async function parameterizedAllocation() {
   const testPool = createNumberArrayTestPool();
 
-  const add = indirect()(
+  const add = makeIndirect()(
     function addBody(result: number[], l: number[], r: number[]) {
       const minLength = Math.min(result.length, l.length, r.length);
       for (let i = 0; i < minLength; i++) {
@@ -142,7 +142,7 @@ Deno.test(async function empty() {
 Deno.test(async function twoOutputs(t) {
   const testPool = createBoxedNumberTestPool();
 
-  const divmod = indirectN()(
+  const divmod = makeIndirectN()(
     function divmodBody(
       [div, mod]: [Box<number>, Box<number>],
       l: Box<number>,
@@ -156,7 +156,7 @@ Deno.test(async function twoOutputs(t) {
     () => testPool.provide(),
     () => testPool.provide(),
   ]);
-  const add = indirect()(
+  const add = makeIndirect()(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value + r.value;
     },
@@ -195,13 +195,13 @@ Deno.test(async function twoOutputs(t) {
 Deno.test(async function outputUsage(t) {
   const testPool = createBoxedNumberTestPool();
 
-  const add = indirect()(
+  const add = makeIndirect()(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value + r.value;
     },
   );
   const pureAdd = purify(add, () => testPool.provide());
-  const mul = indirect()(
+  const mul = makeIndirect()(
     function mulBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value * r.value;
     },
@@ -259,7 +259,7 @@ Deno.test(async function outputUsage(t) {
 Deno.test(async function calcIO() {
   const testPool = createNumberPipeBoxTestPool();
 
-  const add = indirect()(
+  const add = makeIndirect()(
     function addBody(
       result: IPipeBoxW<number>,
       l: IPipeBoxR<number>,
@@ -269,7 +269,7 @@ Deno.test(async function calcIO() {
     },
   );
   const pureAdd = purify(add, () => testPool.provide());
-  const mul = indirect()(
+  const mul = makeIndirect()(
     function mulBody(
       result: IPipeBoxW<number>,
       l: IPipeBoxR<number>,
@@ -307,7 +307,7 @@ Deno.test(async function calcIO() {
 Deno.test(async function asyncCalc() {
   const testPool = createBoxedNumberTestPool();
 
-  const add = indirect()(
+  const add = makeIndirect()(
     async function addBody(
       result: Box<number>,
       l: Box<number>,
@@ -318,7 +318,7 @@ Deno.test(async function asyncCalc() {
     },
   );
   const pureAdd = purify(add, () => testPool.provide());
-  const mul = indirect()(
+  const mul = makeIndirect()(
     async function mulBody(
       result: Box<number>,
       l: Box<number>,
@@ -346,7 +346,7 @@ Deno.test(async function asyncCalc() {
 
 Deno.test(async function middleware(t) {
   const addLog: string[] = [];
-  const add = indirect({
+  const add = makeIndirect({
     middlewares: [async (next) => {
       addLog.push("1 before");
       await next();
@@ -362,7 +362,7 @@ Deno.test(async function middleware(t) {
     },
   );
   const divmodLog: string[] = [];
-  const divmod = indirectN({
+  const divmod = makeIndirectN({
     middlewares: [async (next) => {
       divmodLog.push("1 before");
       await next();
@@ -411,10 +411,10 @@ Deno.test(async function middleware(t) {
 });
 
 Deno.test(function types() {
-  const so = indirect()(
+  const so = makeIndirect()(
     function soBody(_x: Box<number>, _a: Box<string>, _b: Box<boolean>) {},
   );
-  const mo = indirectN()(
+  const mo = makeIndirectN()(
     function moBody(
       [_x, _y]: [Box<number>, Box<string>],
       _a: Box<boolean>,
