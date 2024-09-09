@@ -1,7 +1,6 @@
 import {
   assertEquals,
   assertFalse,
-  assertGreater,
   assertGreaterOrEqual,
   assertThrows,
 } from "@std/assert";
@@ -34,31 +33,65 @@ const contextOptions: Partial<ContextOptions> = {
   assertNoLeak: true,
 };
 
-Deno.test(async function calc() {
+type TestPool<T, Args extends readonly unknown[]> = {
+  provider: ProviderWrap<T, Args>;
+  assertNoError(): void;
+};
+
+function createTestPool<T, Args extends readonly unknown[]>(
+  create: (...args: Args) => T,
+  cleanup: (x: T) => void,
+): TestPool<T, Args> {
   let errorReported = false;
 
-  const boxedNumberPool = new Pool<Box<number>, []>(
-    () => new Box<number>(),
-    (x) => x.clear(),
+  const pool = new Pool<T, Args>(
+    create,
+    cleanup,
     (e) => {
       errorReported = true;
       console.error(e);
     },
   );
-  const boxedNumberProvider = new ProviderWrap(boxedNumberPool);
+  const provider = new ProviderWrap(pool);
+
+  return {
+    provider,
+    assertNoError() {
+      assertEquals(pool.acquiredCount, 0);
+      assertGreaterOrEqual(pool.pooledCount, 0);
+      assertEquals(pool.taintedCount, 0);
+      assertFalse(errorReported);
+    },
+  };
+}
+
+function createBoxedNumberTestPool(): TestPool<Box<number>, []> {
+  return createTestPool(() => new Box<number>(), (x) => x.clear());
+}
+
+function createNumberArrayTestPool(): TestPool<number[], [number]> {
+  return createTestPool((l) => new Array(l).fill(0), (x) => x.fill(0));
+}
+
+function createNumberPipeBoxTestPool(): TestPool<IPipeBoxRW<number>, []> {
+  return createTestPool(() => pipeBoxRW<number>(), (x) => x.clear());
+}
+
+Deno.test(async function calc() {
+  const testPool = createBoxedNumberTestPool();
 
   const add = proction()(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value + r.value;
     },
   );
-  const pureAdd = purify(add, () => boxedNumberProvider.acquire());
+  const pureAdd = purify(add, () => testPool.provider.acquire());
   const mul = proction()(
     function mulBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value * r.value;
     },
   );
-  const pureMul = purify(mul, () => boxedNumberProvider.acquire());
+  const pureMul = purify(mul, () => testPool.provider.acquire());
 
   const resultBody = new Box<number>();
 
@@ -77,24 +110,11 @@ Deno.test(async function calc() {
   });
 
   assertEquals(resultBody.value, 26);
-  assertEquals(boxedNumberPool.acquiredCount, 0);
-  assertGreater(boxedNumberPool.pooledCount, 0);
-  assertEquals(boxedNumberPool.taintedCount, 0);
-  assertFalse(errorReported);
+  testPool.assertNoError();
 });
 
 Deno.test(async function parameterizedAllocation() {
-  let errorReported = false;
-
-  const arrayPool = new Pool<number[], [number]>(
-    (l) => new Array(l).fill(0),
-    (x) => x.fill(0),
-    (e) => {
-      errorReported = true;
-      console.error(e);
-    },
-  );
-  const arrayProvider = new ProviderWrap(arrayPool);
+  const testPool = createNumberArrayTestPool();
 
   const add = proction()(
     function addBody(result: number[], l: number[], r: number[]) {
@@ -106,7 +126,7 @@ Deno.test(async function parameterizedAllocation() {
   );
   const pureAdd = purify(
     add,
-    (l, r) => arrayProvider.acquire(Math.min(l.length, r.length)),
+    (l, r) => testPool.provider.acquire(Math.min(l.length, r.length)),
   );
 
   const resultBody = new Array(5);
@@ -120,10 +140,7 @@ Deno.test(async function parameterizedAllocation() {
   });
 
   assertEquals(resultBody, [111, 222, 333, 444, 555]);
-  assertEquals(arrayPool.acquiredCount, 0);
-  assertGreater(arrayPool.pooledCount, 0);
-  assertEquals(arrayPool.taintedCount, 0);
-  assertFalse(errorReported);
+  testPool.assertNoError();
 });
 
 Deno.test(async function empty() {
@@ -131,24 +148,7 @@ Deno.test(async function empty() {
 });
 
 Deno.test(async function twoOutputs(t) {
-  let errorReported = false;
-
-  const boxedNumberPool = new Pool<Box<number>, []>(
-    () => new Box<number>(),
-    (x) => x.clear(),
-    (e) => {
-      errorReported = true;
-      console.error(e);
-    },
-  );
-  const boxedNumberProvider = new ProviderWrap(boxedNumberPool);
-
-  function assertPostCondition() {
-    assertEquals(boxedNumberPool.acquiredCount, 0);
-    assertGreaterOrEqual(boxedNumberPool.pooledCount, 0);
-    assertEquals(boxedNumberPool.taintedCount, 0);
-    assertFalse(errorReported);
-  }
+  const testPool = createBoxedNumberTestPool();
 
   const divmod = proctionN()(
     function divmodBody(
@@ -161,8 +161,8 @@ Deno.test(async function twoOutputs(t) {
     },
   );
   const pureDivmod = purifyN(divmod, [
-    () => boxedNumberProvider.acquire(),
-    () => boxedNumberProvider.acquire(),
+    () => testPool.provider.acquire(),
+    () => testPool.provider.acquire(),
   ]);
   const add = proction()(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
@@ -183,7 +183,7 @@ Deno.test(async function twoOutputs(t) {
 
     assertEquals(divBody.value, 8);
     assertEquals(modBody.value, 2);
-    assertPostCondition();
+    testPool.assertNoError();
   });
 
   await t.step(async function modOutputIsIntermediate() {
@@ -199,42 +199,25 @@ Deno.test(async function twoOutputs(t) {
     });
 
     assertEquals(resultBody.value, 102);
-    assertPostCondition();
+    testPool.assertNoError();
   });
 });
 
 Deno.test(async function outputUsage(t) {
-  let errorReported = false;
-
-  const boxedNumberPool = new Pool<Box<number>, []>(
-    () => new Box<number>(),
-    (x) => x.clear(),
-    (e) => {
-      errorReported = true;
-      console.error(e);
-    },
-  );
-  const boxedNumberProvider = new ProviderWrap(boxedNumberPool);
-
-  function assertPostCondition() {
-    assertEquals(boxedNumberPool.acquiredCount, 0);
-    assertGreaterOrEqual(boxedNumberPool.pooledCount, 0);
-    assertEquals(boxedNumberPool.taintedCount, 0);
-    assertFalse(errorReported);
-  }
+  const testPool = createBoxedNumberTestPool();
 
   const add = proction()(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value + r.value;
     },
   );
-  const pureAdd = purify(add, () => boxedNumberProvider.acquire());
+  const pureAdd = purify(add, () => testPool.provider.acquire());
   const mul = proction()(
     function mulBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value * r.value;
     },
   );
-  const pureMul = purify(mul, () => boxedNumberProvider.acquire());
+  const pureMul = purify(mul, () => testPool.provider.acquire());
 
   await t.step(async function noOutputsAreUsed() {
     await new Context(contextOptions).run(({ source }) => {
@@ -245,7 +228,7 @@ Deno.test(async function outputUsage(t) {
       pureMul(input1, input2);
     });
 
-    assertPostCondition();
+    testPool.assertNoError();
   });
 
   await t.step(async function outputIsUsedTwice() {
@@ -264,7 +247,7 @@ Deno.test(async function outputUsage(t) {
       add(result2, sum, source(Box.withValue(4)));
     });
 
-    assertPostCondition();
+    testPool.assertNoError();
     assertEquals(result1Body.value, 132);
     assertEquals(result2Body.value, 48);
   });
@@ -281,24 +264,14 @@ Deno.test(async function outputUsage(t) {
       mul(result, sum, source(Box.withValue(3)));
     });
 
-    assertPostCondition();
+    testPool.assertNoError();
     assertEquals(sumBody.value, 44);
     assertEquals(resultBody.value, 132);
   });
 });
 
 Deno.test(async function calcIO() {
-  let errorReported = false;
-
-  const boxedNumberPool = new Pool<IPipeBoxRW<number>, []>(
-    () => pipeBoxRW<number>(),
-    (x) => x.clear(),
-    (e) => {
-      errorReported = true;
-      console.error(e);
-    },
-  );
-  const boxedNumberProvider = new ProviderWrap(boxedNumberPool);
+  const testPool = createNumberPipeBoxTestPool();
 
   const add = proction()(
     function addBody(
@@ -309,7 +282,7 @@ Deno.test(async function calcIO() {
       result.setValue(l.getValue() + r.getValue());
     },
   );
-  const pureAdd = purify(add, () => boxedNumberProvider.acquire());
+  const pureAdd = purify(add, () => testPool.provider.acquire());
   const mul = proction()(
     function mulBody(
       result: IPipeBoxW<number>,
@@ -319,7 +292,7 @@ Deno.test(async function calcIO() {
       result.setValue(l.getValue() * r.getValue());
     },
   );
-  const pureMul = purify(mul, () => boxedNumberProvider.acquire());
+  const pureMul = purify(mul, () => testPool.provider.acquire());
 
   const [input1R, input1W] = pipeBox<number>();
   input1W.setValue(1);
@@ -348,24 +321,11 @@ Deno.test(async function calcIO() {
 
   assertEquals(result1R.getValue(), 26);
   assertEquals(result2RW.getValue(), 105);
-  assertEquals(boxedNumberPool.acquiredCount, 0);
-  assertGreater(boxedNumberPool.pooledCount, 0);
-  assertEquals(boxedNumberPool.taintedCount, 0);
-  assertFalse(errorReported);
+  testPool.assertNoError();
 });
 
 Deno.test(async function asyncCalc() {
-  let errorReported = false;
-
-  const boxedNumberPool = new Pool<Box<number>, []>(
-    () => new Box<number>(),
-    (x) => x.clear(),
-    (e) => {
-      errorReported = true;
-      console.error(e);
-    },
-  );
-  const boxedNumberProvider = new ProviderWrap(boxedNumberPool);
+  const testPool = createBoxedNumberTestPool();
 
   const add = proction()(
     async function addBody(
@@ -377,7 +337,7 @@ Deno.test(async function asyncCalc() {
       result.value = l.value + r.value;
     },
   );
-  const pureAdd = purify(add, () => boxedNumberProvider.acquire());
+  const pureAdd = purify(add, () => testPool.provider.acquire());
   const mul = proction()(
     async function mulBody(
       result: Box<number>,
@@ -388,7 +348,7 @@ Deno.test(async function asyncCalc() {
       result.value = l.value * r.value;
     },
   );
-  const pureMul = purify(mul, () => boxedNumberProvider.acquire());
+  const pureMul = purify(mul, () => testPool.provider.acquire());
 
   const resultBody = new Box<number>();
 
@@ -407,10 +367,7 @@ Deno.test(async function asyncCalc() {
   });
 
   assertEquals(resultBody.value, 26);
-  assertEquals(boxedNumberPool.acquiredCount, 0);
-  assertGreater(boxedNumberPool.pooledCount, 0);
-  assertEquals(boxedNumberPool.taintedCount, 0);
-  assertFalse(errorReported);
+  testPool.assertNoError();
 });
 
 Deno.test(async function middleware(t) {
