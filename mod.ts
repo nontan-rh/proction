@@ -8,7 +8,7 @@ import { Brand } from "./_brand.ts";
 import { DisposableWrap } from "./_provider.ts";
 import { DelayedRc } from "./_delayedrc.ts";
 import { idGenerator } from "./_idgenerator.ts";
-export type { DisposableWrap, Provide } from "./_provider.ts";
+export type { DisposableWrap, ProvideFn } from "./_provider.ts";
 export { provider } from "./_provider.ts";
 
 const parentPlanKey = Symbol("parentPlan");
@@ -68,11 +68,11 @@ export function getPlan(
   return plan;
 }
 
-type InvocationBody = () => Promise<void>;
-export type Middleware = (next: () => Promise<void>) => Promise<void>;
+type InvocationBodyFn = () => Promise<void>;
+export type MiddlewareFn = (next: () => Promise<void>) => Promise<void>;
 
 type MakeIndirectOptions = {
-  middlewares?: Middleware[];
+  middlewares?: MiddlewareFn[];
 };
 
 export function makeIndirect(
@@ -248,7 +248,7 @@ interface Invocation {
   readonly inputs: readonly UntypedHandle[];
   readonly outputs: readonly UntypedHandle[];
   readonly run: () => Promise<void>;
-  readonly middlewares: Middleware[];
+  readonly middlewares: MiddlewareFn[];
   readonly next: Invocation[];
   numBlockers: number;
   numResolvedBlockers: number;
@@ -686,8 +686,8 @@ function assertNoLeak(plan: Plan) {
 }
 
 function applyMiddlewares(
-  body: InvocationBody,
-  middlewares: Middleware[],
-): InvocationBody {
-  return middlewares.reduceRight<InvocationBody>((f, m) => () => m(f), body);
+  body: InvocationBodyFn,
+  middlewares: MiddlewareFn[],
+): InvocationBodyFn {
+  return middlewares.reduceRight<InvocationBodyFn>((f, m) => () => m(f), body);
 }

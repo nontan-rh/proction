@@ -12,7 +12,7 @@ import {
   Handle,
   makeIndirect,
   makeIndirectN,
-  Provide,
+  ProvideFn,
   provider,
   purify,
   purifyN,
@@ -35,7 +35,7 @@ const contextOptions: Partial<ContextOptions> = {
 };
 
 type TestPool<T, Args extends readonly unknown[]> = {
-  provide: Provide<T, Args>;
+  provide: ProvideFn<T, Args>;
   assertNoError(): void;
 };
 
@@ -53,7 +53,10 @@ function createTestPool<T, Args extends readonly unknown[]>(
       console.error(e);
     },
   );
-  const provide = provider(pool.acquire, pool.release);
+  const provide = provider(
+    (...args: Args) => pool.acquire(...args),
+    (x) => pool.release(x),
+  );
 
   return {
     provide,

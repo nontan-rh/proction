@@ -1,5 +1,3 @@
-import { Acquire, Release } from "../_provider.ts";
-
 export class Pool<T, Args extends readonly unknown[]> {
   #create: (...args: Args) => T;
   #cleanup: (x: T) => void;
@@ -10,8 +8,6 @@ export class Pool<T, Args extends readonly unknown[]> {
   #pooledCount = 0;
   #acquiredCount = 0;
   #taintedCount = 0;
-  acquire: Acquire<T, Args>;
-  release: Release<T>;
 
   constructor(
     create: (...args: Args) => T,
@@ -21,44 +17,6 @@ export class Pool<T, Args extends readonly unknown[]> {
     this.#create = create;
     this.#cleanup = cleanup;
     this.#reportError = reportError;
-
-    this.acquire = (...args: Args): T => {
-      const pooledCell = this.#pooledCells.pop();
-      if (pooledCell == null) {
-        const body = this.#create(...args);
-        this.#acquiredCount++;
-        return body;
-      }
-
-      const body = pooledCell.body;
-      this.#releaseCell(pooledCell);
-      this.#pooledCount--;
-      this.#acquiredCount++;
-      return body;
-    };
-
-    this.release = (x: T): void => {
-      try {
-        this.#cleanup(x);
-      } catch (e: unknown) {
-        try {
-          this.#reportError(e);
-        } catch {
-          // cannot recover
-        }
-
-        const taintedCell = this.#acquireCell(x);
-        this.#taintedCells.push(taintedCell);
-        this.#acquiredCount--;
-        this.#taintedCount++;
-        return;
-      }
-
-      const pooledCell = this.#acquireCell(x);
-      this.#pooledCells.push(pooledCell);
-      this.#acquiredCount--;
-      this.#pooledCount++;
-    };
   }
 
   get pooledCount(): number {
@@ -71,6 +29,44 @@ export class Pool<T, Args extends readonly unknown[]> {
 
   get taintedCount(): number {
     return this.#taintedCount;
+  }
+
+  acquire(...args: Args): T {
+    const pooledCell = this.#pooledCells.pop();
+    if (pooledCell == null) {
+      const body = this.#create(...args);
+      this.#acquiredCount++;
+      return body;
+    }
+
+    const body = pooledCell.body;
+    this.#releaseCell(pooledCell);
+    this.#pooledCount--;
+    this.#acquiredCount++;
+    return body;
+  }
+
+  release(x: T): void {
+    try {
+      this.#cleanup(x);
+    } catch (e: unknown) {
+      try {
+        this.#reportError(e);
+      } catch {
+        // cannot recover
+      }
+
+      const taintedCell = this.#acquireCell(x);
+      this.#taintedCells.push(taintedCell);
+      this.#acquiredCount--;
+      this.#taintedCount++;
+      return;
+    }
+
+    const pooledCell = this.#acquireCell(x);
+    this.#pooledCells.push(pooledCell);
+    this.#acquiredCount--;
+    this.#pooledCount++;
   }
 
   #acquireCell(x: T): { body: T } {

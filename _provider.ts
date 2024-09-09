@@ -1,20 +1,22 @@
 import { LogicError } from "./_error.ts";
 
-export type Acquire<T, Args extends readonly unknown[]> = (...args: Args) => T;
-export type Release<T> = (x: T) => void;
+export type AcquireFn<T, Args extends readonly unknown[]> = (
+  ...args: Args
+) => T;
+export type ReleaseFn<T> = (x: T) => void;
 
 export interface DisposableWrap<T> {
   get body(): T;
   [Symbol.dispose]: () => void;
 }
-export type Provide<T, Args extends readonly unknown[]> = (
+export type ProvideFn<T, Args extends readonly unknown[]> = (
   ...args: Args
 ) => DisposableWrap<T>;
 
 export function provider<T, Args extends readonly unknown[]>(
-  acquire: Acquire<T, Args>,
-  release: Release<T>,
-): Provide<T, Args> {
+  acquire: AcquireFn<T, Args>,
+  release: ReleaseFn<T>,
+): ProvideFn<T, Args> {
   return (...args: Args) => {
     const body = acquire(...args);
     return new DisposableWrapImpl(release, body);
@@ -24,9 +26,9 @@ export function provider<T, Args extends readonly unknown[]>(
 class DisposableWrapImpl<T> implements DisposableWrap<T> {
   #disposed: boolean;
   #body?: T;
-  #release: Release<T>;
+  #release: ReleaseFn<T>;
 
-  constructor(release: Release<T>, body: T) {
+  constructor(release: ReleaseFn<T>, body: T) {
     this.#disposed = false;
     this.#body = body;
     this.#release = release;
