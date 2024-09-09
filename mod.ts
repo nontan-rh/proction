@@ -8,7 +8,8 @@ import { Brand } from "./_brand.ts";
 import { AllocatorResult } from "./_provider.ts";
 import { DelayedRc } from "./_delayedrc.ts";
 import { idGenerator } from "./_idgenerator.ts";
-export { type AllocatorResult, ProviderWrap } from "./_provider.ts";
+export type { AllocatorResult, Provide } from "./_provider.ts";
+export { provider } from "./_provider.ts";
 
 const parentPlanKey = Symbol("parentPlan");
 const handleIdKey = Symbol("handleId");

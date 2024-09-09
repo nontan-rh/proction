@@ -12,7 +12,8 @@ import {
   Handle,
   proction,
   proctionN,
-  ProviderWrap,
+  Provide,
+  provider,
   purify,
   purifyN,
 } from "./mod.ts";
@@ -34,7 +35,7 @@ const contextOptions: Partial<ContextOptions> = {
 };
 
 type TestPool<T, Args extends readonly unknown[]> = {
-  provider: ProviderWrap<T, Args>;
+  provide: Provide<T, Args>;
   assertNoError(): void;
 };
 
@@ -52,10 +53,10 @@ function createTestPool<T, Args extends readonly unknown[]>(
       console.error(e);
     },
   );
-  const provider = new ProviderWrap(pool);
+  const provide = provider(pool.acquire, pool.release);
 
   return {
-    provider,
+    provide,
     assertNoError() {
       assertEquals(pool.acquiredCount, 0);
       assertGreaterOrEqual(pool.pooledCount, 0);
@@ -85,13 +86,13 @@ Deno.test(async function calc() {
       result.value = l.value + r.value;
     },
   );
-  const pureAdd = purify(add, () => testPool.provider.acquire());
+  const pureAdd = purify(add, () => testPool.provide());
   const mul = proction()(
     function mulBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value * r.value;
     },
   );
-  const pureMul = purify(mul, () => testPool.provider.acquire());
+  const pureMul = purify(mul, () => testPool.provide());
 
   const resultBody = new Box<number>();
 
@@ -126,7 +127,7 @@ Deno.test(async function parameterizedAllocation() {
   );
   const pureAdd = purify(
     add,
-    (l, r) => testPool.provider.acquire(Math.min(l.length, r.length)),
+    (l, r) => testPool.provide(Math.min(l.length, r.length)),
   );
 
   const resultBody = new Array(5);
@@ -161,8 +162,8 @@ Deno.test(async function twoOutputs(t) {
     },
   );
   const pureDivmod = purifyN(divmod, [
-    () => testPool.provider.acquire(),
-    () => testPool.provider.acquire(),
+    () => testPool.provide(),
+    () => testPool.provide(),
   ]);
   const add = proction()(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
@@ -211,13 +212,13 @@ Deno.test(async function outputUsage(t) {
       result.value = l.value + r.value;
     },
   );
-  const pureAdd = purify(add, () => testPool.provider.acquire());
+  const pureAdd = purify(add, () => testPool.provide());
   const mul = proction()(
     function mulBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value * r.value;
     },
   );
-  const pureMul = purify(mul, () => testPool.provider.acquire());
+  const pureMul = purify(mul, () => testPool.provide());
 
   await t.step(async function noOutputsAreUsed() {
     await new Context(contextOptions).run(({ source }) => {
@@ -282,7 +283,7 @@ Deno.test(async function calcIO() {
       result.setValue(l.getValue() + r.getValue());
     },
   );
-  const pureAdd = purify(add, () => testPool.provider.acquire());
+  const pureAdd = purify(add, () => testPool.provide());
   const mul = proction()(
     function mulBody(
       result: IPipeBoxW<number>,
@@ -292,7 +293,7 @@ Deno.test(async function calcIO() {
       result.setValue(l.getValue() * r.getValue());
     },
   );
-  const pureMul = purify(mul, () => testPool.provider.acquire());
+  const pureMul = purify(mul, () => testPool.provide());
 
   const [input1R, input1W] = pipeBox<number>();
   input1W.setValue(1);
@@ -337,7 +338,7 @@ Deno.test(async function asyncCalc() {
       result.value = l.value + r.value;
     },
   );
-  const pureAdd = purify(add, () => testPool.provider.acquire());
+  const pureAdd = purify(add, () => testPool.provide());
   const mul = proction()(
     async function mulBody(
       result: Box<number>,
@@ -348,7 +349,7 @@ Deno.test(async function asyncCalc() {
       result.value = l.value * r.value;
     },
   );
-  const pureMul = purify(mul, () => testPool.provider.acquire());
+  const pureMul = purify(mul, () => testPool.provide());
 
   const resultBody = new Box<number>();
 
