@@ -4,8 +4,8 @@ import {
   assertGreater,
   assertGreaterOrEqual,
   assertThrows,
-  delay,
-} from "./deps.ts";
+} from "@std/assert";
+import { delay } from "@std/async";
 import {
   AllocatorResult,
   Context,
