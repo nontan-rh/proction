@@ -71,12 +71,12 @@ export function getPlan(
 type InvocationBody = () => Promise<void>;
 export type Middleware = (next: () => Promise<void>) => Promise<void>;
 
-type ActionOptions = {
+type IndirectOptions = {
   middlewares?: Middleware[];
 };
 
-export function proction(
-  actionOptions?: ActionOptions,
+export function indirect(
+  indirectOptions?: IndirectOptions,
 ): <O, I extends readonly unknown[]>(
   f: (output: O, ...inputs: I) => void | Promise<void>,
   decolatorContext?: DecoratorContext,
@@ -84,7 +84,7 @@ export function proction(
   output: Handle<O>,
   ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => void {
-  const middlewares = actionOptions?.middlewares ?? [];
+  const middlewares = indirectOptions?.middlewares ?? [];
 
   return function decoratorFn<
     O,
@@ -127,8 +127,8 @@ export function proction(
   };
 }
 
-export function proctionN(
-  actionOptions?: ActionOptions,
+export function indirectN(
+  indirectOptions?: IndirectOptions,
 ): <
   O extends readonly unknown[],
   I extends readonly unknown[],
@@ -139,7 +139,7 @@ export function proctionN(
   outputs: { [key in keyof O]: Handle<O[key]> }, // expanded for readability of inferred type
   ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => void {
-  const middlewares = actionOptions?.middlewares ?? [];
+  const middlewares = indirectOptions?.middlewares ?? [];
 
   return function decoratorFn<
     O extends readonly unknown[],
@@ -187,7 +187,7 @@ export function purify<
   I extends readonly UntypedHandle[],
   A extends O,
 >(
-  rawAction: (
+  indirectProcedure: (
     output: Handle<O>,
     ...inputs: I
   ) => void,
@@ -201,7 +201,7 @@ export function purify<
       plan,
       () => provide(...restoreInputs(plan, inputs)),
     );
-    rawAction(output, ...inputs);
+    indirectProcedure(output, ...inputs);
     return output;
   };
 }
@@ -211,7 +211,7 @@ export function purifyN<
   I extends readonly UntypedHandle[],
   A extends O,
 >(
-  rawAction: (
+  indirectProcedure: (
     outputs: MappedHandleType<O>,
     ...inputs: I
   ) => void,
@@ -236,7 +236,7 @@ export function purifyN<
     }
     const outputs = partialOutputs as MappedHandleType<O>;
 
-    rawAction(outputs, ...inputs);
+    indirectProcedure(outputs, ...inputs);
 
     return outputs;
   };
