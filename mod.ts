@@ -5,10 +5,10 @@ import {
   unreachable,
 } from "./_error.ts";
 import { Brand } from "./_brand.ts";
-import { AllocatorResult } from "./_provider.ts";
+import { DisposableWrap } from "./_provider.ts";
 import { DelayedRc } from "./_delayedrc.ts";
 import { idGenerator } from "./_idgenerator.ts";
-export type { AllocatorResult, Provide } from "./_provider.ts";
+export type { DisposableWrap, Provide } from "./_provider.ts";
 export { provider } from "./_provider.ts";
 
 const parentPlanKey = Symbol("parentPlan");
@@ -191,7 +191,7 @@ export function purify<
     output: Handle<O>,
     ...inputs: I
   ) => void,
-  allocator: (...inputs: MappedBodyType<I>) => AllocatorResult<A>,
+  provide: (...inputs: MappedBodyType<I>) => DisposableWrap<A>,
 ): (
   ...inputs: I
 ) => Handle<A> {
@@ -199,7 +199,7 @@ export function purify<
     const plan = getPlan(...inputs);
     const output = intermediate(
       plan,
-      () => allocator(...restoreInputs(plan, inputs)),
+      () => provide(...restoreInputs(plan, inputs)),
     );
     rawAction(output, ...inputs);
     return output;
@@ -215,8 +215,8 @@ export function purifyN<
     outputs: MappedHandleType<O>,
     ...inputs: I
   ) => void,
-  allocators: {
-    [key in keyof O]: (...inputs: MappedBodyType<I>) => AllocatorResult<A[key]>;
+  provideFns: {
+    [key in keyof O]: (...inputs: MappedBodyType<I>) => DisposableWrap<A[key]>;
   },
 ): (
   ...inputs: I
@@ -226,11 +226,11 @@ export function purifyN<
     const plan = getPlan(...inputs);
 
     const partialOutputs = [];
-    for (let i = 0; i < allocators.length; i++) {
-      const allocator = allocators[i];
+    for (let i = 0; i < provideFns.length; i++) {
+      const provide = provideFns[i];
       const handle = intermediate(
         plan,
-        () => allocator(...restoreInputs(plan, inputs)),
+        () => provide(...restoreInputs(plan, inputs)),
       );
       partialOutputs.push(handle);
     }
@@ -283,7 +283,7 @@ export class Context {
     const runParams: InnerContext = {
       source: (value) => source(plan, value),
       sink: (value) => sink(plan, value),
-      intermediate: (allocator) => intermediate(plan, allocator),
+      intermediate: (provide) => intermediate(plan, provide),
     };
     bodyFn(runParams);
     await run(plan, options);
@@ -303,7 +303,7 @@ const defaultContextOptions: ContextOptions = {
 type InnerContext = {
   source<T extends object>(value: T): Handle<T>;
   sink<T extends object>(value: T): Handle<T>;
-  intermediate<T>(allocator: () => AllocatorResult<T>): Handle<T>;
+  intermediate<T>(provide: () => DisposableWrap<T>): Handle<T>;
 };
 
 const undefinedFn = () => {};
@@ -351,8 +351,8 @@ type DataSlot =
 type SourceSlot = { type: "source"; body: unknown };
 type IntermediateSlot = {
   type: "intermediate";
-  allocator: () => AllocatorResult<unknown>;
-  allocatorResultContainer: DelayedRc<AllocatorResult<unknown>>;
+  provide: () => DisposableWrap<unknown>;
+  disposableWrapContainer: DelayedRc<DisposableWrap<unknown>>;
 };
 type SinkSlot = { type: "sink"; body: unknown };
 
@@ -402,16 +402,16 @@ function sink<T extends object>(plan: Plan, value: T): Handle<T> {
 
 function intermediate<T>(
   plan: Plan,
-  allocator: () => AllocatorResult<T>,
+  provide: () => DisposableWrap<T>,
 ): Handle<T> {
   const handle = plan[internalPlanKey].generateHandle();
 
   plan[internalPlanKey].dataSlots.set(handle[handleIdKey], {
     type: "intermediate",
-    allocatorResultContainer: new DelayedRc((x) => {
+    disposableWrapContainer: new DelayedRc((x) => {
       x[Symbol.dispose]();
     }, plan.context[contextOptionsKey].reportError),
-    allocator,
+    provide,
   });
 
   return handle as Handle<T>;
@@ -554,7 +554,7 @@ function prepareDataSlots(
         case "source":
           break;
         case "intermediate":
-          dataSlot.allocatorResultContainer.incRef();
+          dataSlot.disposableWrapContainer.incRef();
           break;
         case "sink":
           break;
@@ -591,7 +591,7 @@ function restore<T>(plan: Plan, handle: Handle<T>): T {
       return body as T;
     }
     case "intermediate":
-      return dataSlot.allocatorResultContainer.managedObject.body as T;
+      return dataSlot.disposableWrapContainer.managedObject.body as T;
     case "sink": {
       const body = dataSlot.body;
       return body as T;
@@ -620,7 +620,7 @@ function decRef(plan: Plan, handle: UntypedHandle): void {
     case "source":
       break;
     case "intermediate":
-      dataSlot.allocatorResultContainer.decRef();
+      dataSlot.disposableWrapContainer.decRef();
       break;
     case "sink":
       break;
@@ -643,9 +643,9 @@ function prepareOutput<T>(
     case "source":
       throw new LogicError(`unexpected data slot type: ${type}`);
     case "intermediate": {
-      const allocatorResult = dataSlot.allocator();
-      dataSlot.allocatorResultContainer.initialize(allocatorResult);
-      return allocatorResult.body as T;
+      const disposableWrap = dataSlot.provide();
+      dataSlot.disposableWrapContainer.initialize(disposableWrap);
+      return disposableWrap.body as T;
     }
     case "sink": {
       const body = dataSlot.body;
@@ -679,7 +679,7 @@ function assertNoLeak(plan: Plan) {
       case "source":
         break;
       case "intermediate":
-        if (!dataSlot.allocatorResultContainer.isFreed) {
+        if (!dataSlot.disposableWrapContainer.isFreed) {
           throw new AssertionError(
             "intermediate data slot is not freed",
           );

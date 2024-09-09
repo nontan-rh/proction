@@ -6,9 +6,9 @@ import {
 } from "@std/assert";
 import { delay } from "@std/async";
 import {
-  AllocatorResult,
   Context,
   ContextOptions,
+  DisposableWrap,
   Handle,
   proction,
   proctionN,
@@ -451,13 +451,13 @@ Deno.test(function types() {
   const sop = purify(
     so,
     (_a: Box<string>, _b: Box<boolean>) =>
-      testValue<AllocatorResult<Box<number>>>(),
+      testValue<DisposableWrap<Box<number>>>(),
   );
   const mop = purifyN(mo, [
     (_a: Box<boolean>, _b: Box<bigint>) =>
-      testValue<AllocatorResult<Box<number>>>(),
+      testValue<DisposableWrap<Box<number>>>(),
     (_a: Box<boolean>, _b: Box<bigint>) =>
-      testValue<AllocatorResult<Box<string>>>(),
+      testValue<DisposableWrap<Box<string>>>(),
   ]);
 
   // testValue throws an error
