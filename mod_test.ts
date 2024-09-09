@@ -83,6 +83,49 @@ Deno.test(async function calc() {
   assertFalse(errorReported);
 });
 
+Deno.test(async function parameterizedAllocation() {
+  let errorReported = false;
+
+  const arrayPool = new Pool<number[], [number]>(
+    (l) => new Array(l).fill(0),
+    (x) => x.fill(0),
+    (e) => {
+      errorReported = true;
+      console.error(e);
+    },
+  );
+  const arrayProvider = new ProviderWrap(arrayPool);
+
+  const add = proction()(
+    function addBody(result: number[], l: number[], r: number[]) {
+      const minLength = Math.min(result.length, l.length, r.length);
+      for (let i = 0; i < minLength; i++) {
+        result[i] = l[i] + r[i];
+      }
+    },
+  );
+  const pureAdd = purify(
+    add,
+    (l, r) => arrayProvider.acquire(Math.min(l.length, r.length)),
+  );
+
+  const resultBody = new Array(5);
+  await new Context(contextOptions).run(({ source, sink }) => {
+    const result = sink(resultBody);
+    const result1 = pureAdd(
+      source([1, 2, 3, 4, 5]),
+      source([10, 20, 30, 40, 50]),
+    );
+    add(result, result1, source([100, 200, 300, 400, 500]));
+  });
+
+  assertEquals(resultBody, [111, 222, 333, 444, 555]);
+  assertEquals(arrayPool.acquiredCount, 0);
+  assertGreater(arrayPool.pooledCount, 0);
+  assertEquals(arrayPool.taintedCount, 0);
+  assertFalse(errorReported);
+});
+
 Deno.test(async function empty() {
   await new Context(contextOptions).run(() => {});
 });
