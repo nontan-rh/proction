@@ -47,7 +47,7 @@ export function getPlan(
       if (plan == null) {
         plan = p;
       } else if (p !== plan) {
-        throw new PreconditionError("Plan inconsitent");
+        throw new PreconditionError("Plan inconsistent");
       }
     } else {
       for (const h of t) {
@@ -55,7 +55,7 @@ export function getPlan(
         if (plan == null) {
           plan = p;
         } else if (p !== plan) {
-          throw new PreconditionError("Plan inconsitent");
+          throw new PreconditionError("Plan inconsistent");
         }
       }
     }
@@ -79,7 +79,7 @@ export function makeIndirect(
   makeIndirectOptions?: MakeIndirectOptions,
 ): <O, I extends readonly unknown[]>(
   f: (output: O, ...inputs: I) => void | Promise<void>,
-  decolatorContext?: DecoratorContext,
+  decoratorContext?: DecoratorContext,
 ) => (
   output: Handle<O>,
   ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
