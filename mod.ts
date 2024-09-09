@@ -300,7 +300,7 @@ const defaultContextOptions: ContextOptions = {
   assertNoLeak: false,
 };
 
-type RunContext = {
+export type RunContext = {
   $s<T extends object>(value: T): Handle<T>;
   $d<T extends object>(value: T): Handle<T>;
   $i<T>(provide: () => DisposableWrap<T>): Handle<T>;
