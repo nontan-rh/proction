@@ -273,21 +273,24 @@ export class Context {
 
     this[contextOptionsKey] = mergedOptions;
   }
+}
 
-  async run(bodyFn: (runContext: RunContext) => void) {
-    const plan: Plan = {
-      context: this,
-      [internalPlanKey]: new InternalPlan(this),
-    };
-    plan[internalPlanKey].plan = plan;
-    const runContext: RunContext = {
-      $s: (value) => source(plan, value),
-      $d: (value) => destination(plan, value),
-      $i: (provide) => intermediate(plan, provide),
-    };
-    bodyFn(runContext);
-    await run(plan);
-  }
+export async function run(
+  context: Context,
+  bodyFn: (runContext: RunContext) => void,
+) {
+  const plan: Plan = {
+    context,
+    [internalPlanKey]: new InternalPlan(context),
+  };
+  plan[internalPlanKey].plan = plan;
+  const runContext: RunContext = {
+    $s: (value) => source(plan, value),
+    $d: (value) => destination(plan, value),
+    $i: (provide) => intermediate(plan, provide),
+  };
+  bodyFn(runContext);
+  await runPlan(plan);
 }
 
 export type ContextOptions = {
@@ -417,7 +420,7 @@ function intermediate<T>(
   return handle as Handle<T>;
 }
 
-async function run(
+async function runPlan(
   plan: Plan,
 ): Promise<void> {
   if (plan[internalPlanKey].state !== "initial") {
