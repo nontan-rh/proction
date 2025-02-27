@@ -10,13 +10,13 @@ import {
   ContextOptions,
   DisposableWrap,
   Handle,
-  makeIndirect,
-  makeIndirectN,
+  proc,
+  procN,
   ProvideFn,
   provider,
-  purify,
-  purifyN,
   run,
+  toFunc,
+  toFuncN,
 } from "./mod.ts";
 import { Pool } from "./_testutils/pool.ts";
 import { Box } from "./_testutils/box.ts";
@@ -85,18 +85,18 @@ function createNumberPipeBoxTestPool(): TestPool<IPipeBoxRW<number>, []> {
 Deno.test(async function calc() {
   const testPool = createBoxedNumberTestPool();
 
-  const add = makeIndirect()(
+  const add = proc()(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value + r.value;
     },
   );
-  const pureAdd = purify(add, () => testPool.provide());
-  const mul = makeIndirect()(
+  const pureAdd = toFunc(add, () => testPool.provide());
+  const mul = proc()(
     function mulBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value * r.value;
     },
   );
-  const pureMul = purify(mul, () => testPool.provide());
+  const pureMul = toFunc(mul, () => testPool.provide());
 
   const resultBody = new Box<number>();
 
@@ -115,7 +115,7 @@ Deno.test(async function calc() {
 Deno.test(async function parameterizedAllocation() {
   const testPool = createNumberArrayTestPool();
 
-  const add = makeIndirect()(
+  const add = proc()(
     function addBody(result: number[], l: number[], r: number[]) {
       const minLength = Math.min(result.length, l.length, r.length);
       for (let i = 0; i < minLength; i++) {
@@ -123,7 +123,7 @@ Deno.test(async function parameterizedAllocation() {
       }
     },
   );
-  const pureAdd = purify(
+  const pureAdd = toFunc(
     add,
     (l, r) => testPool.provide(Math.min(l.length, r.length)),
   );
@@ -146,7 +146,7 @@ Deno.test(async function empty() {
 Deno.test(async function twoOutputs(t) {
   const testPool = createBoxedNumberTestPool();
 
-  const divmod = makeIndirectN()(
+  const divmod = procN()(
     function divmodBody(
       [div, mod]: [Box<number>, Box<number>],
       l: Box<number>,
@@ -156,11 +156,11 @@ Deno.test(async function twoOutputs(t) {
       mod.value = l.value % r.value;
     },
   );
-  const pureDivmod = purifyN(divmod, [
+  const pureDivmod = toFuncN(divmod, [
     () => testPool.provide(),
     () => testPool.provide(),
   ]);
-  const add = makeIndirect()(
+  const add = proc()(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value + r.value;
     },
@@ -199,18 +199,18 @@ Deno.test(async function twoOutputs(t) {
 Deno.test(async function outputUsage(t) {
   const testPool = createBoxedNumberTestPool();
 
-  const add = makeIndirect()(
+  const add = proc()(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value + r.value;
     },
   );
-  const pureAdd = purify(add, () => testPool.provide());
-  const mul = makeIndirect()(
+  const pureAdd = toFunc(add, () => testPool.provide());
+  const mul = proc()(
     function mulBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value * r.value;
     },
   );
-  const pureMul = purify(mul, () => testPool.provide());
+  const pureMul = toFunc(mul, () => testPool.provide());
 
   await t.step(async function noOutputsAreUsed() {
     await run(new Context(contextOptions), ({ $s }) => {
@@ -263,7 +263,7 @@ Deno.test(async function outputUsage(t) {
 Deno.test(async function calcIO() {
   const testPool = createNumberPipeBoxTestPool();
 
-  const add = makeIndirect()(
+  const add = proc()(
     function addBody(
       result: IPipeBoxW<number>,
       l: IPipeBoxR<number>,
@@ -272,8 +272,8 @@ Deno.test(async function calcIO() {
       result.setValue(l.getValue() + r.getValue());
     },
   );
-  const pureAdd = purify(add, () => testPool.provide());
-  const mul = makeIndirect()(
+  const pureAdd = toFunc(add, () => testPool.provide());
+  const mul = proc()(
     function mulBody(
       result: IPipeBoxW<number>,
       l: IPipeBoxR<number>,
@@ -282,7 +282,7 @@ Deno.test(async function calcIO() {
       result.setValue(l.getValue() * r.getValue());
     },
   );
-  const pureMul = purify(mul, () => testPool.provide());
+  const pureMul = toFunc(mul, () => testPool.provide());
 
   const [input1R, input1W] = pipeBox<number>();
   input1W.setValue(1);
@@ -311,7 +311,7 @@ Deno.test(async function calcIO() {
 Deno.test(async function asyncCalc() {
   const testPool = createBoxedNumberTestPool();
 
-  const add = makeIndirect()(
+  const add = proc()(
     async function addBody(
       result: Box<number>,
       l: Box<number>,
@@ -321,8 +321,8 @@ Deno.test(async function asyncCalc() {
       result.value = l.value + r.value;
     },
   );
-  const pureAdd = purify(add, () => testPool.provide());
-  const mul = makeIndirect()(
+  const pureAdd = toFunc(add, () => testPool.provide());
+  const mul = proc()(
     async function mulBody(
       result: Box<number>,
       l: Box<number>,
@@ -332,7 +332,7 @@ Deno.test(async function asyncCalc() {
       result.value = l.value * r.value;
     },
   );
-  const pureMul = purify(mul, () => testPool.provide());
+  const pureMul = toFunc(mul, () => testPool.provide());
 
   const resultBody = new Box<number>();
 
@@ -350,7 +350,7 @@ Deno.test(async function asyncCalc() {
 
 Deno.test(async function middleware(t) {
   const addLog: string[] = [];
-  const add = makeIndirect({
+  const add = proc({
     middlewares: [async (next) => {
       addLog.push("1 before");
       await next();
@@ -366,7 +366,7 @@ Deno.test(async function middleware(t) {
     },
   );
   const divmodLog: string[] = [];
-  const divmod = makeIndirectN({
+  const divmod = procN({
     middlewares: [async (next) => {
       divmodLog.push("1 before");
       await next();
@@ -415,22 +415,22 @@ Deno.test(async function middleware(t) {
 });
 
 Deno.test(function types() {
-  const so = makeIndirect()(
+  const so = proc()(
     function soBody(_x: Box<number>, _a: Box<string>, _b: Box<boolean>) {},
   );
-  const mo = makeIndirectN()(
+  const mo = procN()(
     function moBody(
       [_x, _y]: [Box<number>, Box<string>],
       _a: Box<boolean>,
       _b: Box<bigint>,
     ) {},
   );
-  const sop = purify(
+  const sop = toFunc(
     so,
     (_a: Box<string>, _b: Box<boolean>) =>
       testValue<DisposableWrap<Box<number>>>(),
   );
-  const mop = purifyN(mo, [
+  const mop = toFuncN(mo, [
     (_a: Box<boolean>, _b: Box<bigint>) =>
       testValue<DisposableWrap<Box<number>>>(),
     (_a: Box<boolean>, _b: Box<bigint>) =>

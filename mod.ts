@@ -71,12 +71,12 @@ export function getPlan(
 type InvocationBodyFn = () => Promise<void>;
 export type MiddlewareFn = (next: () => Promise<void>) => Promise<void>;
 
-type MakeIndirectOptions = {
+type ProcOptions = {
   middlewares?: MiddlewareFn[];
 };
 
-export function makeIndirect(
-  makeIndirectOptions?: MakeIndirectOptions,
+export function proc(
+  procOptions?: ProcOptions,
 ): <O, I extends readonly unknown[]>(
   f: (output: O, ...inputs: I) => void | Promise<void>,
   decoratorContext?: DecoratorContext,
@@ -84,7 +84,7 @@ export function makeIndirect(
   output: Handle<O>,
   ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => void {
-  const middlewares = makeIndirectOptions?.middlewares ?? [];
+  const middlewares = procOptions?.middlewares ?? [];
 
   return function decoratorFn<
     O,
@@ -127,8 +127,8 @@ export function makeIndirect(
   };
 }
 
-export function makeIndirectN(
-  makeIndirectOptions?: MakeIndirectOptions,
+export function procN(
+  procOptions?: ProcOptions,
 ): <
   O extends readonly unknown[],
   I extends readonly unknown[],
@@ -139,7 +139,7 @@ export function makeIndirectN(
   outputs: { [key in keyof O]: Handle<O[key]> }, // expanded for readability of inferred type
   ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => void {
-  const middlewares = makeIndirectOptions?.middlewares ?? [];
+  const middlewares = procOptions?.middlewares ?? [];
 
   return function decoratorFn<
     O extends readonly unknown[],
@@ -182,7 +182,7 @@ export function makeIndirectN(
   };
 }
 
-export function purify<
+export function toFunc<
   O,
   I extends readonly UntypedHandle[],
   A extends O,
@@ -206,7 +206,7 @@ export function purify<
   };
 }
 
-export function purifyN<
+export function toFuncN<
   O extends readonly unknown[],
   I extends readonly UntypedHandle[],
   A extends O,
