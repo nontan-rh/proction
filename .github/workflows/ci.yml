@@ -9,7 +9,7 @@ jobs:
   check:
     strategy:
       matrix:
-        deno-version: [v2.2, v2.x, v1.x]
+        deno-version: [v2.2, v2.x]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,7 +17,7 @@ jobs:
         with:
           deno-version: ${{ matrix.deno-version }}
       - run: deno fmt --check
-        if: ${{ matrix.deno-version != 'v1.x' && matrix.deno-version != 'v2.x' }}
+        if: ${{ matrix.deno-version != 'v2.x' }}
       - run: deno lint
-        if: ${{ matrix.deno-version != 'v1.x' && matrix.deno-version != 'v2.x' }}
+        if: ${{ matrix.deno-version != 'v2.x' }}
       - run: deno test
