@@ -562,10 +562,15 @@ class InternalPlan {
     [handleIdKey]: value as HandleId,
     [phantomDataKey]: undefinedFn,
   }));
-  dataSlots = new Map<HandleId, DataSlot>();
+  dataSlots: Map<HandleId, DataSlot> = new Map<HandleId, DataSlot>();
 
-  generateInvocationID = idGenerator((value) => value as InvocationID);
-  invocations = new Map<InvocationID, Invocation>();
+  generateInvocationID: () => InvocationID = idGenerator((value) =>
+    value as InvocationID
+  );
+  invocations: Map<InvocationID, Invocation> = new Map<
+    InvocationID,
+    Invocation
+  >();
 
   constructor(context: Context) {
     this.context = context;
