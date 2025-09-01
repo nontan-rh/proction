@@ -7,12 +7,12 @@ import {
 import { delay } from "@std/async";
 import {
   Context,
-  ContextOptions,
-  DisposableWrap,
-  Handle,
+  type ContextOptions,
+  type DisposableWrap,
+  type Handle,
   proc,
   procN,
-  ProvideFn,
+  type ProvideFn,
   provider,
   run,
   toFunc,
@@ -21,9 +21,9 @@ import {
 import { Pool } from "./_testutils/pool.ts";
 import { Box } from "./_testutils/box.ts";
 import {
-  IPipeBoxR,
-  IPipeBoxRW,
-  IPipeBoxW,
+  type IPipeBoxR,
+  type IPipeBoxRW,
+  type IPipeBoxW,
   pipeBox,
   pipeBoxR,
   pipeBoxRW,

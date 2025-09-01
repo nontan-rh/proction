@@ -1,9 +1,9 @@
 import {
   assertIsChildTypeOf,
-  ChildType,
-  ParentType,
+  type ChildType,
+  type ParentType,
 } from "./_testutils/mod.ts";
-import { DisposableWrap } from "./_provider.ts";
+import type { DisposableWrap } from "./_provider.ts";
 
 assertIsChildTypeOf<DisposableWrap<ChildType>, DisposableWrap<ParentType>>();
 // @ts-expect-error: DisposableWrap is covariant

@@ -1,4 +1,8 @@
-import { assertIsChildTypeOf, ChildType, ParentType } from "./types.ts";
+import {
+  assertIsChildTypeOf,
+  type ChildType,
+  type ParentType,
+} from "./types.ts";
 
 let parent: ParentType = undefined!;
 let child: ChildType = undefined!;

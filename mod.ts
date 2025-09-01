@@ -48,8 +48,8 @@ import {
   PreconditionError,
   unreachable,
 } from "./_error.ts";
-import { Brand } from "./_brand.ts";
-import { DisposableWrap } from "./_provider.ts";
+import type { Brand } from "./_brand.ts";
+import type { DisposableWrap } from "./_provider.ts";
 import { DelayedRc } from "./_delayedrc.ts";
 import { idGenerator } from "./_idgenerator.ts";
 export type {
