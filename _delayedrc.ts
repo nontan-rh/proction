@@ -1,5 +1,9 @@
 import { LogicError } from "./_error.ts";
 
+/**
+ * An internal class to manage a reference counter that delays the initialization of the held object.
+ * @typeparam T The type of the held object.
+ */
 export class DelayedRc<T> {
   #initialized: boolean;
   #managedObject?: T;
@@ -7,6 +11,11 @@ export class DelayedRc<T> {
   #destroy: (x: T) => void;
   #reportError: (e: unknown) => void;
 
+  /**
+   * Creates a DelayedRc. This does not initialize the held object yet.
+   * @param destroy A function to destroy the held object.
+   * @param reportError A function to report an error.
+   */
   constructor(
     destroy: (x: T) => void,
     reportError: (e: unknown) => void,
@@ -18,6 +27,10 @@ export class DelayedRc<T> {
     this.#reportError = reportError;
   }
 
+  /**
+   * Initializes the held object.
+   * @param managedObject The object to hold.
+   */
   initialize(managedObject: T) {
     this.#assertNotInitialized();
 
@@ -25,18 +38,31 @@ export class DelayedRc<T> {
     this.#managedObject = managedObject;
   }
 
+  /**
+   * Gets the held object.
+   * @returns The held object.
+   */
   get managedObject(): T {
     this.#assertIsValid();
 
     return this.#managedObject!;
   }
 
+  /**
+   * Increments the reference count.
+   */
   incRef(): void {
     this.#assertNotFreed();
 
     this.#count++;
   }
 
+  /**
+   * Decrements the reference count.
+   * If the reference count reaches 0, the held object is destroyed.
+   * If some exception is thrown during the destruction, it is reported to the reportError function
+   * and the exception is not rethrown.
+   */
   decRef(): void {
     this.#assertIsValid();
 
@@ -57,6 +83,10 @@ export class DelayedRc<T> {
     }
   }
 
+  /**
+   * Checks if the reference counter is freed.
+   * @returns True if the reference counter is freed, false otherwise.
+   */
   get isFreed(): boolean {
     return this.#count <= 0;
   }
