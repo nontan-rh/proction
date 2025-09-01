@@ -25,7 +25,7 @@ interface ArrayPool {
   acquire(length: number): number[];
   release(obj: number[]): void;
 }
-const pool: ArrayPool = {}!; // some implementation
+const pool: ArrayPool = {/* some implementation */};
 const provide = provider((x) => pool.acquire(x), (x) => pool.release(x));
 
 const addProc = proc()(
@@ -36,7 +36,7 @@ const addProc = proc()(
   },
 );
 
-const addFunc = toFunc(addProc, (lht, _rht) => pool.acquire(lht.length));
+const addFunc = toFunc(addProc, (lht, _rht) => provide(lht.length));
 
 const ctx = new Context();
 async function sum(output: number[], a: number[], b: number[], c: number[]) {
@@ -50,7 +50,7 @@ async function sum(output: number[], a: number[], b: number[], c: number[]) {
 
 ## License
 
-See `LICENSE.txt`.
+See [LICENSE.txt](LICENSE.txt).
 
 ## Notice
 

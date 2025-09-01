@@ -11,7 +11,7 @@ Proction is a utility library for computation-heavy tasks that provides:
 
 Each feature is provided in a modular, customizable way, and you can combine them as you like.
 
-## Problem: calculations on arrays
+## Problem: Calculations on Arrays
 
 Let's compute the inner products of many pairs of 3D vectors. Storing the vectors in a structure-of-arrays (SoA) layout, their components are given as six arrays of numbers (`a` through `f`). The array of inner products is then calculated as `(a * b) + (c * d) + (e * f)`.
 
@@ -85,7 +85,7 @@ First, look at allocations. In Answer X, allocations happen inside `add` and `mu
 
 In contrast, in Answer Y, allocations are done in the caller `innerProduct` and the buffers are passed to the functions. The number of allocations is 3, which is fewer than in Answer X.
 
-Furthermore, we can introduce an object pool into Answer Y. Let's call this "Answer Y'". In Answer Y', no allocations are performed after the second invocation of `innerProduct`.
+We can introduce an object pool into Answer Y to reduce allocations further. Let's call this "Answer Y'". In Answer Y', no allocations are performed after the second invocation of `innerProduct`.
 
 ```ts
 // Answer Y'
@@ -119,13 +119,52 @@ How about the composability of `add` and `mul`? In Answer X, the implementation 
 
 Answer Y' has the same problem as Answer Y. We must also manage buffer lifetimes manually in this case.
 
-### Total comparison
+### Overall Comparison
 
 Both Answer X and Answer Y (and Y') have pros and cons. Answer X seems better for maintainability. However, Answer Y (and Y') wins in terms of efficiency. This is a trade-off.
 
-## Motivation
+## Solution
 
-Proction was created to tackle this dilemma. It also addresses several related problems. Below are the core concepts and how to use them.
+Proction was created to tackle this dilemma. It takes the strengths of both Answer X and Answer Y. It also addresses several related problems. Below is an example of how `innerProduct` can be written with Proction. It's a bit verbose for clarity.
+
+```ts
+interface ArrayPool {
+  acquire(length: number): number[];
+  release(obj: number[]): void;
+}
+const pool: ArrayPool = { /* some implementation */ };
+const provide = provider((length) => pool.acquire(length), (obj) => pool.release(obj));
+
+const addProc = proc()((output: number[], lht: number[], rht: number[]) => {
+  for (let i = 0; i < output.length; i++) {
+    output[i] = lht[i] + rht[i];
+  }
+});
+const mulProc = proc()((output: number[], lht: number[], rht: number[]) => {
+  for (let i = 0; i < output.length; i++) {
+    output[i] = lht[i] * rht[i];
+  }
+});
+
+const addFunc = toFunc(addProc, (lht, _rht) => provide(lht.length));
+const mulFunc = toFunc(mulProc, (lht, _rht) => provide(lht.length));
+
+const ctx = new Context();
+async function innerProduct(output: number[], a: number[], b: number[], c: number[], d: number[], e: number[], f: number[]) {
+  await run(ctx, ({ $s, $d }) => {
+    const m1 = mulFunc($s(a), $s(b));
+    const m2 = mulFunc($s(c), $s(d));
+    const m3 = mulFunc($s(e), $s(f));
+    const s1 = addFunc(m1, m2);
+    addProc($d(output), s1, m3);
+  });
+  // Now `output` stores the result!
+}
+```
+
+In this example, the `innerProduct` function looks simple as in Answer X, while using an object pool as in Answer Y'.
+
+The following sections describe the core concepts and how they work.
 
 ## Core Concepts
 
@@ -145,7 +184,7 @@ function addProcedure(output: number[], lht: number[], rht: number[]) {
 
 `addProcedure` takes `lht` and `rht` as input arguments, and `output` as an output buffer. It doesn't allocate resources, and the caller can pass any `number[]` buffer regardless of how it was allocated. On the other hand, the caller always has to allocate and manage these buffers.
 
-This style is especially useful when the output buffer is externally managed or involves I/O features such as the display framebuffer. In low-level languages like C, this also applies to memory-mapped (`mmap`) regions.
+This style is especially useful when the output buffer is externally managed or involves I/O features such as a display framebuffer. In low-level languages like C, this also applies to memory-mapped (`mmap`) regions.
 
 This is the simplest form of routine and the best in terms of cohesion. Proction adopts procedure-style routines as primitives.
 
@@ -167,9 +206,9 @@ function addFunction(lht: number[], rht: number[]): number[] {
 
 Function-style routines are very easy to use. Proction lets you compose subroutines in this form.
 
-### Indirection and style conversion
+### Indirection and Style Conversion
 
-Proction uses indirect routines and provides tools for creating indirect procedures and converting indirect procedures into indirect functions.
+Proction uses indirect routines and provides tools for creating indirect procedures and converting them into indirect functions.
 Indirect routines take and return indirect handles instead of the actual objects. The signature looks like this:
 
 ```ts
@@ -201,9 +240,9 @@ This introduces the "provider" concept required for the conversion. In this exam
 
 (As you may notice, "Proction" is a portmanteau of "procedure" and "function.")
 
-## Performing the calculation
+## Performing the Calculation
 
-We can call and combine indirect routines to perform more complex computations in a `run` block.
+We can call and compose indirect routines to perform more complex computations in a `run` block. `run` and indirect procedures build a computation graph, which the Proction runtime executes.
 
 ```ts
 // Assume these indirect routines are already defined:
@@ -225,7 +264,7 @@ async function innerProduct(output: number[], a: number[], b: number[], c: numbe
 }
 ```
 
-Handles for input data can be created with `$s`, and those for output data with `$d`. As you can see, you can combine indirect procedures and functions in a very intuitive way.
+Handles for input data can be created with `$s`, and those for output data with `$d`. Again, you can combine indirect procedures and functions in a very intuitive way.
 
 ## Providers
 
@@ -260,7 +299,7 @@ const indirectAddProcedure = proc()(
 );
 ```
 
-Function-style indirect routines and Proction's task scheduler prevent data races and help to automatically maximize CPU utilization.
+Function-style indirect routines and Proction's task scheduler prevent data races and help automatically maximize CPU utilization.
 
 ## Middlewares
 
@@ -309,4 +348,4 @@ You can also define more sophisticated middlewares that control the order of exe
 
 Proction reconciles maintainable composition with tight control over resources and execution.
 
-Get started by writing a small procedure with `proc(...)`, derive a function using `toFunc(...)` and a provider, then compose your complex pipeline inside `run(...)`. You keep function-style readability while retaining procedure-style performance and flexibility.
+Get started by writing a small procedure with `proc(...)`, derive a function using `toFunc(...)` and a provider, then compose your complex pipeline inside `run(...)`. This keeps function-style readability while retaining procedure-style performance and flexibility.
