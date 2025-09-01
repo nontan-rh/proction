@@ -3,8 +3,8 @@
     "dev": "deno run --watch main.ts"
   },
   "imports": {
-    "@std/assert": "jsr:@std/assert@^1.0.4",
-    "@std/async": "jsr:@std/async@^1.0.5"
+    "@std/assert": "jsr:@std/assert@^1.0.14",
+    "@std/async": "jsr:@std/async@^1.0.14"
   },
   "fmt": {
     "exclude": ["docs/**"]
