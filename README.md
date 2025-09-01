@@ -16,8 +16,7 @@ them as you like.
 
 ## Introduction
 
-See the
-[introduction article](https://gist.github.com/nontan-rh/9a9b22e0f51b67f2f2e7f315fa0bbdfd).
+See the [introduction article](docs/introduction.md).
 
 ## Example
 
