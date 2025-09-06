@@ -344,6 +344,30 @@ Proction starts all invocations of indirect routines as soon as their dependent 
 
 You can also define more sophisticated middlewares that control the order of execution by introducing priorities to the semaphore. Middlewares can be very powerful in Proction.
 
+## Multiple Outputs
+
+To define a routine with multiple outputs, use `procN` / `toFuncN`. The output argument and return value are tuple-like arrays. You can use multiple-output routines in the same way as the single-output ones.
+
+```ts
+const sincosProc = procN()(([sinOutput, cosOutput]: [number[], number[]], x: number[]) => {
+  for (let i = 0; i < sinOutput.length; i++) {
+    sinOutput[i] = Math.sin(x[i]);
+    cosOutput[i] = Math.cos(x[i]);
+  }
+});
+// function sincosProc(outputs: [Handle<number[]>, Handle<number[]>], x: Handle<number[]>);
+
+const sincosFunc = toFuncN(sincosProc, [(x) => provide(x.length), (x) => provide(x.length)]);
+// function sincosFunc(x: Handle<number[]>): [Handle<number[]>, Handle<number[]>];
+
+const ctx = new Context();
+async function innerProduct(sinOutput: number[], cosOutput: number[], x: number[]) {
+  await run(ctx, ({ $s, $d }) => {
+    sincosProc([$d(sinOutput), $d(cosOutput)], $s(x));
+  });
+}
+```
+
 ## Conclusion
 
 Proction reconciles maintainable composition with tight control over resources and execution.
