@@ -1,10 +1,10 @@
 # Proction
 
-An ergonomic, resource-aware, dataflow-processing library.
+An ergonomic, resource-aware, dataflow processing library for any purpose.
 
 ## About
 
-Proction is a utility library for computation-heavy tasks that provides:
+Proction is a utility library for versatile dataflow-based tasks that provides:
 
 - Fine-grained resource management
 - Parallel processing with fine-grained control
