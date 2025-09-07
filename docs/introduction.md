@@ -211,11 +211,13 @@ Function-style routines are very easy to use. Proction lets you compose subrouti
 ### Indirection and Style Conversion
 
 Proction uses indirect routines and provides tools for creating indirect procedures and converting them into indirect functions.
-Indirect routines take and return indirect handles instead of the actual objects. A `Handle<T>` is an internal reference to a value of type `T` that Proction tracks for dependency and lifetime management; you obtain handles via `$s` (source/input) and `$d` (destination/output) inside `run`. The signature looks like this:
+Indirect routines take and return indirect handles instead of the actual objects. The signature looks like this:
 
 ```ts
 function indirectAddProcedure(output: Handle<number[]>, lht: Handle<number[]>, rht: Handle<number[]>);
 ```
+
+A `Handle<T>` is an internal reference to a value of type `T` that Proction tracks for dependency and lifetime management; you obtain handles from the actual objects via special functions later.
 
 To create indirect procedures easily, Proction provides the `proc` utility. You can define `indirectAddProcedure` like this:
 
