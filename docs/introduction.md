@@ -182,7 +182,7 @@ function addProcedure(output: number[], lht: number[], rht: number[]) {
 }
 ```
 
-`addProcedure` takes `lht` and `rht` as input arguments, and `output` as an output buffer. It doesn't allocate resources, and the caller can pass any `number[]` buffer regardless of how it was allocated. On the other hand, the caller always has to allocate and manage these buffers.
+`addProcedure` takes `lht` and `rht` as input arguments, and `output` as an output buffer. It doesn't allocate resources, and the caller can pass any `number[]` buffer regardless of how it was allocated. Although this example uses arrays, arguments can be of any object type.
 
 This style is especially useful when the output buffer is externally managed or involves I/O features such as a display framebuffer. In low-level languages like C, this also applies to memory-mapped (`mmap`) regions.
 
