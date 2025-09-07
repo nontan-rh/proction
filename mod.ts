@@ -9,7 +9,7 @@
  * - Intuitive interface similar to regular programming
  *
  * Each feature is provided in a modular, customizable way, and you can combine
-them as you like.
+ * them as you like.
  *
  * @example
  *
@@ -75,7 +75,7 @@ const phantomDataKey = Symbol("phantomData");
 /**
  * An internal type to identify a handle.
  */
-type HandleId = Brand<number, "handleID">;
+export type HandleId = Brand<number, "handleID">;
 /**
  * An indirect handle to a resource.
  * @typeparam T The type of the held data.
@@ -185,7 +185,7 @@ export type MiddlewareFn = (next: () => Promise<void>) => Promise<void>;
 /**
  * A type to represent the options of a proc.
  */
-type ProcOptions = {
+export type ProcOptions = {
   /**
    * The middlewares to apply to the indirect procedure.
    */
@@ -335,7 +335,9 @@ export function toFunc<
     output: Handle<O>,
     ...inputs: I
   ) => void,
-  provide: (...inputs: MappedBodyType<I>) => DisposableWrap<A>,
+  provide: (
+    ...inputs: { [key in keyof I]: I[key] extends Handle<infer X> ? X : never }
+  ) => DisposableWrap<A>,
 ): (
   ...inputs: I
 ) => Handle<A> {
@@ -365,11 +367,15 @@ export function toFuncN<
   A extends O,
 >(
   indirectProcedure: (
-    outputs: MappedHandleType<O>,
+    outputs: { [key in keyof O]: Handle<O[key]> },
     ...inputs: I
   ) => void,
   provideFns: {
-    [key in keyof O]: (...inputs: MappedBodyType<I>) => DisposableWrap<A[key]>;
+    [key in keyof O]: (
+      ...inputs: {
+        [key in keyof I]: I[key] extends Handle<infer X> ? X : never;
+      }
+    ) => DisposableWrap<A[key]>;
   },
 ): (
   ...inputs: I
