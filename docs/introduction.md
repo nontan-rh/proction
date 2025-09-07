@@ -13,7 +13,7 @@ Each feature is provided in a modular, customizable way, and you can combine the
 
 ## Problem: Calculations on Arrays
 
-Let's compute the inner products of many pairs of 3D vectors. Storing the vectors in a structure-of-arrays (SoA) layout, their components are given as six arrays of numbers (`a` through `f`). The array of inner products is then calculated as `(a * b) + (c * d) + (e * f)`.
+Let's start with a problem: calculating the inner products of many pairs of 3D vectors. Storing the vectors in a structure-of-arrays (SoA) layout, their components are given as six arrays of numbers (`a` through `f`). The array of inner products is then calculated as `(a * b) + (c * d) + (e * f)`.
 
 We'll define `add` and `mul` as independent functions for maintainability.
 
@@ -81,11 +81,11 @@ Let's call the first implementation "Answer X" and the second "Answer Y", and co
 
 ### Allocation
 
-First, look at allocations. In Answer X, allocations happen inside `add` and `mul`, and buffers are returned from those functions. The number of allocations is 5, which equals the number of invocations of `add` and `mul`.
+First, look at allocations. In Answer X, buffer allocations happen inside `add` and `mul`, and they are returned from those functions. The number of allocations is 5, which equals the number of invocations of `add` and `mul`.
 
-In contrast, in Answer Y, allocations are done in the caller `innerProduct` and the buffers are passed to the functions. The number of allocations is 3, which is fewer than in Answer X.
+In contrast, in Answer Y, buffer allocations are done in the caller `innerProduct` and the buffers are passed to the functions. The number of allocations is 3, which is fewer than in Answer X.
 
-We can introduce an object pool into Answer Y to reduce allocations further. Let's call this "Answer Y'". In Answer Y', no allocations are performed after the second invocation of `innerProduct`.
+To reduce allocations further, we can introduce an object pool into Answer Y. Let's call this "Answer Y'". In Answer Y', no allocations are performed after the second invocation of `innerProduct`. Therefore, the number of allocations is virtually 0 if the function is called many times.
 
 ```ts
 // Answer Y'
@@ -162,7 +162,7 @@ async function innerProduct(output: number[], a: number[], b: number[], c: numbe
 }
 ```
 
-In this example, the `innerProduct` function looks simple as in Answer X, while using an object pool as in Answer Y'.
+In this example, the `innerProduct` function looks simple as in Answer X, while using an object pool as in Answer Y' and keeping buffer allocations to 0 in effect.
 
 The following sections describe the core concepts and how they work.
 
@@ -285,7 +285,7 @@ You can completely reuse `indirectAddProcedure` and customize the resource manag
 
 ## Parallelism
 
-`proc` can take `async` JavaScript functions as their implementation to achieve parallel computing. You can use Web Workers, for example, to take advantage of multi-core CPUs. Here is a very simplified example.
+`proc` can take `async` JavaScript functions as their implementation to enable parallel computing. You can use Web Workers, for example, to take advantage of multi-core CPUs. Here is a very simplified example.
 
 ```ts
 const worker: Worker = /* some worker implementation */;
@@ -321,7 +321,7 @@ const add = proc({
 );
 ```
 
-Because they are defined as `async` JavaScript functions, middlewares are also useful for scheduling routine execution.
+The `async` nature of middlewares also makes them a powerful tool for scheduling routine execution.
 
 ```ts
 interface Semaphore {
