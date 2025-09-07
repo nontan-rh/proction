@@ -128,6 +128,8 @@ Both Answer X and Answer Y (and Y') have pros and cons. Answer X seems better fo
 Proction was created to tackle this dilemma. It takes the strengths of both Answer X and Answer Y. It also addresses several related problems. Below is an example of how `innerProduct` can be written with Proction. It's a bit verbose for clarity.
 
 ```ts
+import { Context, run, proc, toFunc, provider } from "jsr:@nontan-rh/proction";
+
 interface ArrayPool {
   acquire(length: number): number[];
   release(obj: number[]): void;
@@ -162,7 +164,7 @@ async function innerProduct(output: number[], a: number[], b: number[], c: numbe
 }
 ```
 
-In this example, the `innerProduct` function looks simple as in Answer X, while using an object pool as in Answer Y' and keeping buffer allocations to 0 in effect.
+In this example, `innerProduct` remains simple like Answer X, while using a pool like Answer Y' and effectively keeping steady-state allocations at 0.
 
 The following sections describe the core concepts and how they work.
 
@@ -209,7 +211,7 @@ Function-style routines are very easy to use. Proction lets you compose subrouti
 ### Indirection and Style Conversion
 
 Proction uses indirect routines and provides tools for creating indirect procedures and converting them into indirect functions.
-Indirect routines take and return indirect handles instead of the actual objects. The signature looks like this:
+Indirect routines take and return indirect handles instead of the actual objects. A `Handle<T>` is an internal reference to a value of type `T` that Proction tracks for dependency and lifetime management; you obtain handles via `$s` (source/input) and `$d` (destination/output) inside `run`. The signature looks like this:
 
 ```ts
 function indirectAddProcedure(output: Handle<number[]>, lht: Handle<number[]>, rht: Handle<number[]>);
@@ -281,7 +283,7 @@ const provide = provider((length) => pool.acquire(length), (obj) => pool.release
 const indirectAddFunctionWithPool = toFunc(indirectAddProcedure, (lht, _rht) => provide(lht.length));
 ```
 
-You can completely reuse `indirectAddProcedure` and customize the resource management. The objects are returned to the provider as soon as they are no longer required. Thanks to object pools, the number of array allocations is minimized and buffers are reused when possible.
+You can completely reuse `indirectAddProcedure` and customize the resource management. The objects are returned to the provider as soon as they are no longer required. Concretely, Proction tracks the data-dependency graph and releases provider-managed buffers after all downstream consumers complete. Thanks to object pools, the number of array allocations is minimized and buffers are reused when possible, reducing GC pressure in steady state.
 
 ## Parallelism
 
@@ -330,7 +332,7 @@ interface Semaphore {
 }
 const semaphore: Semaphore = /* some semaphore implementation */;
 
-const serializationMiddleware = async (next) => {
+const limitConcurrency = async (next: () => Promise<void>) => {
   await semaphore.acquire();
   try {
     await next();
@@ -361,7 +363,7 @@ const sincosFunc = toFuncN(sincosProc, [(x) => provide(x.length), (x) => provide
 // function sincosFunc(x: Handle<number[]>): [Handle<number[]>, Handle<number[]>];
 
 const ctx = new Context();
-async function innerProduct(sinOutput: number[], cosOutput: number[], x: number[]) {
+async function sincos(sinOutput: number[], cosOutput: number[], x: number[]) {
   await run(ctx, ({ $s, $d }) => {
     sincosProc([$d(sinOutput), $d(cosOutput)], $s(x));
   });
