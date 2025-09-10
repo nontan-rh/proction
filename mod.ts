@@ -53,6 +53,7 @@ import type { Brand } from "./_brand.ts";
 import type { DisposableWrap } from "./_provider.ts";
 import { DelayedRc } from "./_delayedrc.ts";
 import { idGenerator } from "./_idgenerator.ts";
+import { defaultScheduler, type Scheduler } from "./_scheduler.ts";
 export type {
   AcquireFn,
   DisposableWrap,
@@ -60,6 +61,8 @@ export type {
   ReleaseFn,
 } from "./_provider.ts";
 export { provider } from "./_provider.ts";
+export type { Scheduler } from "./_scheduler.ts";
+export { defaultScheduler } from "./_scheduler.ts";
 
 /**
  * An internal symbol used for the key of the parent plan in a handle.
@@ -492,6 +495,10 @@ export type ContextOptions = {
    * Whether to assert no leak. If true, additional assertions are added to the program to ensure that all data slots are freed.
    */
   assertNoLeak: boolean;
+  /**
+   * The task scheduler
+   */
+  scheduler: Scheduler;
 };
 
 /**
@@ -500,6 +507,7 @@ export type ContextOptions = {
 const defaultContextOptions: ContextOptions = {
   reportError: () => {},
   assertNoLeak: false,
+  scheduler: defaultScheduler,
 };
 
 /**
@@ -739,7 +747,7 @@ async function runPlan(
 
       const run = applyMiddlewares(invocation.run, invocation.middlewares);
       runningInvocations.add(invocation.id);
-      run().then(() => {
+      plan.context[contextOptionsKey].scheduler.spawn(run).then(() => {
         for (const next of invocation.next) {
           if (next.numResolvedBlockers >= next.numBlockers) {
             throw new LogicError("the invocation is resolved twice");
