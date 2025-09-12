@@ -233,18 +233,18 @@ export function proc(
       const plan = getPlan(output, ...inputs);
 
       const id = plan[internalPlanKey].generateInvocationID();
+      const body = async () => {
+        const restoredInputs = restoreInputs(plan, inputs);
+        const preparedOutputs = prepareOutput(plan, output);
+        await f(preparedOutputs, ...restoredInputs);
+        decRefArray(plan, inputs);
+        decRef(plan, output);
+      };
       const invocation: Invocation = {
         id,
         inputs,
         outputs: [output],
-        run: async () => {
-          const restoredInputs = restoreInputs(plan, inputs);
-          const preparedOutputs = prepareOutput(plan, output);
-          await f(preparedOutputs, ...restoredInputs);
-          decRefArray(plan, inputs);
-          decRef(plan, output);
-        },
-        middlewares,
+        run: applyMiddlewares(body, middlewares),
         // calculated on run preparation
         next: [],
         numBlockers: 0,
@@ -297,18 +297,18 @@ export function procN(
       const plan = getPlan(outputs, ...inputs);
 
       const id = plan[internalPlanKey].generateInvocationID();
+      const body = async () => {
+        const restoredInputs = restoreInputs(plan, inputs);
+        const preparedOutputs = prepareMultipleOutput(plan, outputs);
+        await f(preparedOutputs, ...restoredInputs);
+        decRefArray(plan, inputs);
+        decRefArray(plan, outputs);
+      };
       const invocation: Invocation = {
         id,
         inputs,
         outputs,
-        run: async () => {
-          const restoredInputs = restoreInputs(plan, inputs);
-          const preparedOutputs = prepareMultipleOutput(plan, outputs);
-          await f(preparedOutputs, ...restoredInputs);
-          decRefArray(plan, inputs);
-          decRefArray(plan, outputs);
-        },
-        middlewares,
+        run: applyMiddlewares(body, middlewares),
         // calculated on run preparation
         next: [],
         numBlockers: 0,
@@ -418,7 +418,6 @@ interface Invocation {
   readonly inputs: readonly UntypedHandle[];
   readonly outputs: readonly UntypedHandle[];
   readonly run: () => Promise<void>;
-  readonly middlewares: MiddlewareFn[];
   readonly next: Invocation[];
   numBlockers: number;
   numResolvedBlockers: number;
@@ -745,26 +744,22 @@ async function runPlan(
         continue;
       }
 
-      const run = applyMiddlewares(invocation.run, invocation.middlewares);
+      const scheduler = plan.context[contextOptionsKey].scheduler;
       runningInvocations.add(invocation.id);
-      plan.context[contextOptionsKey].scheduler.spawn(run).then(() => {
+      scheduler.spawn(invocation.run).then(() => {
         for (const next of invocation.next) {
           if (next.numResolvedBlockers >= next.numBlockers) {
             throw new LogicError("the invocation is resolved twice");
           }
-
           next.numResolvedBlockers++;
           if (next.numResolvedBlockers >= next.numBlockers) {
             freeInvocations.push(next);
           }
         }
-
         runningInvocations.delete(invocation.id);
-
         notify();
       }, (_: unknown) => {
         runningInvocations.delete(invocation.id);
-
         notify();
       });
     }
