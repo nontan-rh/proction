@@ -179,21 +179,43 @@ export function getPlan(
 /**
  * An internal type to represent an invocation.
  */
-type InvocationBodyFn = () => Promise<void>;
+type InvocationBodyFn<
+  O extends readonly unknown[],
+  I extends readonly unknown[],
+> = (
+  plan: Plan,
+  outputs: MappedHandleType<O>,
+  inputs: MappedHandleType<I>,
+) => Promise<void>;
 /**
  * A type to represent a middleware function.
  * @param next Invoke to run the next middleware or the underlying body.
  */
-export type MiddlewareFn = (next: () => Promise<void>) => Promise<void>;
+export type MiddlewareFn<
+  O extends readonly unknown[],
+  I extends readonly unknown[],
+> = (
+  next: (
+    plan: Plan,
+    outputs: MappedHandleType<O>,
+    inputs: MappedHandleType<I>,
+  ) => Promise<void>,
+  plan: Plan,
+  outputs: MappedHandleType<O>,
+  inputs: MappedHandleType<I>,
+) => Promise<void>;
 
 /**
  * A type to represent the options of a proc.
  */
-export type ProcOptions = {
+export type ProcOptions<
+  O extends readonly unknown[],
+  I extends readonly unknown[],
+> = {
   /**
    * The middlewares to apply to the indirect procedure.
    */
-  middlewares?: MiddlewareFn[];
+  middlewares?: MiddlewareFn<O, I>[];
 };
 
 /**
@@ -205,56 +227,50 @@ export type ProcOptions = {
  * @param procOptions The options of the proc.
  * @returns A decorator to generate an indirect procedure.
  */
-export function proc(
-  procOptions?: ProcOptions,
-): <O, I extends readonly unknown[]>(
+export function proc<O, I extends readonly unknown[]>(
   f: (output: O, ...inputs: I) => void | Promise<void>,
-  decoratorContext?: DecoratorContext,
-) => (
+  procOptions?: ProcOptions<[O], I>,
+): (
   output: Handle<O>,
   ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => void {
   const middlewares = procOptions?.middlewares ?? [];
 
-  return function decoratorFn<
-    O,
-    I extends readonly unknown[],
-  >(
-    f: (output: O, ...inputs: I) => void | Promise<void>,
-    _decoratorContext?: DecoratorContext,
-  ): (
-    output: Handle<O>,
-    ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
-  ) => void {
-    const g = (
-      output: Handle<O>,
-      ...inputs: MappedHandleType<I>
-    ) => {
-      const plan = getPlan(output, ...inputs);
-
-      const id = plan[internalPlanKey].generateInvocationID();
-      const body = async () => {
-        const restoredInputs = restoreInputs(plan, inputs);
-        const preparedOutputs = prepareOutput(plan, output);
-        await f(preparedOutputs, ...restoredInputs);
-        decRefArray(plan, inputs);
-        decRef(plan, output);
-      };
-      const invocation: Invocation = {
-        id,
-        inputs,
-        outputs: [output],
-        run: applyMiddlewares(body, middlewares),
-        // calculated on run preparation
-        next: [],
-        numBlockers: 0,
-        numResolvedBlockers: 0,
-      };
-      plan[internalPlanKey].invocations.set(invocation.id, invocation);
-    };
-
-    return g;
+  let body = async (
+    plan: Plan,
+    outputs: [Handle<O>],
+    inputs: MappedHandleType<I>,
+  ) => {
+    const restoredInputs = restoreInputs(plan, inputs);
+    const preparedOutput = prepareOutput(plan, outputs[0]);
+    await f(preparedOutput, ...restoredInputs);
+    decRefArray(plan, inputs);
+    decRef(plan, outputs[0]);
   };
+  body = applyMiddlewares(body, middlewares);
+
+  const g = (
+    output: Handle<O>,
+    ...inputs: MappedHandleType<I>
+  ) => {
+    const plan = getPlan(output, inputs);
+
+    const id = plan[internalPlanKey].generateInvocationID();
+
+    const invocation: Invocation = {
+      id,
+      inputs,
+      outputs: [output],
+      run: () => body(plan, [output], inputs),
+      // calculated on run preparation
+      next: [],
+      numBlockers: 0,
+      numResolvedBlockers: 0,
+    };
+    plan[internalPlanKey].invocations.set(invocation.id, invocation);
+  };
+
+  return g;
 }
 
 /**
@@ -266,59 +282,72 @@ export function proc(
  * @param procOptions The options of the proc.
  * @returns A decorator to generate an indirect procedure.
  */
-export function procN(
-  procOptions?: ProcOptions,
-): <
+export function procN<
   O extends readonly unknown[],
   I extends readonly unknown[],
 >(
   f: (outputs: O, ...inputs: I) => void | Promise<void>,
-  decoratorContext?: DecoratorContext,
-) => (
+  procOptions?: ProcOptions<O, I>,
+): (
   outputs: { [key in keyof O]: Handle<O[key]> }, // expanded for readability of inferred type
   ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => void {
   const middlewares = procOptions?.middlewares ?? [];
 
-  return function decoratorFn<
-    O extends readonly unknown[],
-    I extends readonly unknown[],
-  >(
-    f: (outputs: O, ...inputs: I) => void | Promise<void>,
-    _decoratorContext?: DecoratorContext,
-  ): (
-    outputs: { [key in keyof O]: Handle<O[key]> }, // expanded for readability of inferred type
-    ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
-  ) => void {
-    const g = (
-      outputs: MappedHandleType<O>,
-      ...inputs: MappedHandleType<I>
-    ) => {
-      const plan = getPlan(outputs, ...inputs);
-
-      const id = plan[internalPlanKey].generateInvocationID();
-      const body = async () => {
-        const restoredInputs = restoreInputs(plan, inputs);
-        const preparedOutputs = prepareMultipleOutput(plan, outputs);
-        await f(preparedOutputs, ...restoredInputs);
-        decRefArray(plan, inputs);
-        decRefArray(plan, outputs);
-      };
-      const invocation: Invocation = {
-        id,
-        inputs,
-        outputs,
-        run: applyMiddlewares(body, middlewares),
-        // calculated on run preparation
-        next: [],
-        numBlockers: 0,
-        numResolvedBlockers: 0,
-      };
-      plan[internalPlanKey].invocations.set(invocation.id, invocation);
-    };
-
-    return g;
+  let body = async (
+    plan: Plan,
+    outputs: MappedHandleType<O>,
+    inputs: MappedHandleType<I>,
+  ) => {
+    const restoredInputs = restoreInputs(plan, inputs);
+    const preparedOutputs = prepareMultipleOutput(plan, outputs);
+    await f(preparedOutputs, ...restoredInputs);
+    decRefArray(plan, inputs);
+    decRefArray(plan, outputs);
   };
+  body = applyMiddlewares(body, middlewares);
+
+  const g = (
+    outputs: MappedHandleType<O>,
+    ...inputs: MappedHandleType<I>
+  ) => {
+    const plan = getPlan(outputs, inputs);
+
+    const id = plan[internalPlanKey].generateInvocationID();
+
+    const invocation: Invocation = {
+      id,
+      inputs,
+      outputs,
+      run: () => body(plan, outputs, inputs),
+      // calculated on run preparation
+      next: [],
+      numBlockers: 0,
+      numResolvedBlockers: 0,
+    };
+    plan[internalPlanKey].invocations.set(invocation.id, invocation);
+  };
+
+  return g;
+}
+
+/**
+ * An internal function to apply the middlewares to the body function.
+ * @param body The body function.
+ * @param middlewares The middlewares to apply.
+ * @returns The body function with the middlewares applied.
+ */
+function applyMiddlewares<
+  O extends readonly unknown[],
+  I extends readonly unknown[],
+>(
+  body: InvocationBodyFn<O, I>,
+  middlewares: MiddlewareFn<O, I>[],
+): InvocationBodyFn<O, I> {
+  return middlewares.reduceRight<InvocationBodyFn<O, I>>(
+    (f, m) => (plan, outputs, inputs) => m(f, plan, outputs, inputs),
+    body,
+  );
 }
 
 /**
@@ -346,7 +375,7 @@ export function toFunc<
   ...inputs: I
 ) => Handle<A> {
   return (...inputs: I): Handle<A> => {
-    const plan = getPlan(...inputs);
+    const plan = getPlan(inputs);
     const output = intermediate(
       plan,
       () => provide(...restoreInputs(plan, inputs)),
@@ -386,7 +415,7 @@ export function toFuncN<
 ) => { [key in keyof O]: Handle<A[key]> } // expanded for readability of inferred type
 {
   return (...inputs: I): MappedHandleType<O> => {
-    const plan = getPlan(...inputs);
+    const plan = getPlan(inputs);
 
     const partialOutputs = [];
     for (let i = 0; i < provideFns.length; i++) {
@@ -1023,17 +1052,4 @@ function assertNoLeak(plan: Plan) {
         return unreachable(type);
     }
   }
-}
-
-/**
- * An internal function to apply the middlewares to the body function.
- * @param body The body function.
- * @param middlewares The middlewares to apply.
- * @returns The body function with the middlewares applied.
- */
-function applyMiddlewares(
-  body: InvocationBodyFn,
-  middlewares: MiddlewareFn[],
-): InvocationBodyFn {
-  return middlewares.reduceRight<InvocationBodyFn>((f, m) => () => m(f), body);
 }
