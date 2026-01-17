@@ -85,13 +85,13 @@ function createNumberPipeBoxTestPool(): TestPool<IPipeBoxRW<number>, []> {
 Deno.test(async function calc() {
   const testPool = createBoxedNumberTestPool();
 
-  const add = proc()(
+  const add = proc(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value + r.value;
     },
   );
   const pureAdd = toFunc(add, () => testPool.provide());
-  const mul = proc()(
+  const mul = proc(
     function mulBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value * r.value;
     },
@@ -115,7 +115,7 @@ Deno.test(async function calc() {
 Deno.test(async function parameterizedAllocation() {
   const testPool = createNumberArrayTestPool();
 
-  const add = proc()(
+  const add = proc(
     function addBody(result: number[], l: number[], r: number[]) {
       const minLength = Math.min(result.length, l.length, r.length);
       for (let i = 0; i < minLength; i++) {
@@ -146,7 +146,7 @@ Deno.test(async function empty() {
 Deno.test(async function twoOutputs(t) {
   const testPool = createBoxedNumberTestPool();
 
-  const divmod = procN()(
+  const divmod = procN(
     function divmodBody(
       [div, mod]: [Box<number>, Box<number>],
       l: Box<number>,
@@ -160,7 +160,7 @@ Deno.test(async function twoOutputs(t) {
     () => testPool.provide(),
     () => testPool.provide(),
   ]);
-  const add = proc()(
+  const add = proc(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value + r.value;
     },
@@ -199,13 +199,13 @@ Deno.test(async function twoOutputs(t) {
 Deno.test(async function outputUsage(t) {
   const testPool = createBoxedNumberTestPool();
 
-  const add = proc()(
+  const add = proc(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value + r.value;
     },
   );
   const pureAdd = toFunc(add, () => testPool.provide());
-  const mul = proc()(
+  const mul = proc(
     function mulBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value * r.value;
     },
@@ -263,7 +263,7 @@ Deno.test(async function outputUsage(t) {
 Deno.test(async function calcIO() {
   const testPool = createNumberPipeBoxTestPool();
 
-  const add = proc()(
+  const add = proc(
     function addBody(
       result: IPipeBoxW<number>,
       l: IPipeBoxR<number>,
@@ -273,7 +273,7 @@ Deno.test(async function calcIO() {
     },
   );
   const pureAdd = toFunc(add, () => testPool.provide());
-  const mul = proc()(
+  const mul = proc(
     function mulBody(
       result: IPipeBoxW<number>,
       l: IPipeBoxR<number>,
@@ -311,7 +311,7 @@ Deno.test(async function calcIO() {
 Deno.test(async function asyncCalc() {
   const testPool = createBoxedNumberTestPool();
 
-  const add = proc()(
+  const add = proc(
     async function addBody(
       result: Box<number>,
       l: Box<number>,
@@ -322,7 +322,7 @@ Deno.test(async function asyncCalc() {
     },
   );
   const pureAdd = toFunc(add, () => testPool.provide());
-  const mul = proc()(
+  const mul = proc(
     async function mulBody(
       result: Box<number>,
       l: Box<number>,
@@ -350,33 +350,24 @@ Deno.test(async function asyncCalc() {
 
 Deno.test(async function middleware(t) {
   const addLog: string[] = [];
-  const add = proc({
-    middlewares: [async (next) => {
-      addLog.push("1 before");
-      await next();
-      addLog.push("1 after");
-    }, async (next) => {
-      addLog.push("2 before");
-      await next();
-      addLog.push("2 after");
-    }],
-  })(
+  const add = proc(
     function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
       result.value = l.value + r.value;
     },
+    {
+      middlewares: [async (next) => {
+        addLog.push("1 before");
+        await next();
+        addLog.push("1 after");
+      }, async (next) => {
+        addLog.push("2 before");
+        await next();
+        addLog.push("2 after");
+      }],
+    },
   );
   const divmodLog: string[] = [];
-  const divmod = procN({
-    middlewares: [async (next) => {
-      divmodLog.push("1 before");
-      await next();
-      divmodLog.push("1 after");
-    }, async (next) => {
-      divmodLog.push("2 before");
-      await next();
-      divmodLog.push("2 after");
-    }],
-  })(
+  const divmod = procN(
     function divmodBody(
       [div, mod]: [Box<number>, Box<number>],
       l: Box<number>,
@@ -384,6 +375,17 @@ Deno.test(async function middleware(t) {
     ) {
       div.value = Math.floor(l.value / r.value);
       mod.value = l.value % r.value;
+    },
+    {
+      middlewares: [async (next) => {
+        divmodLog.push("1 before");
+        await next();
+        divmodLog.push("1 after");
+      }, async (next) => {
+        divmodLog.push("2 before");
+        await next();
+        divmodLog.push("2 after");
+      }],
     },
   );
 
@@ -415,10 +417,10 @@ Deno.test(async function middleware(t) {
 });
 
 Deno.test(function types() {
-  const so = proc()(
+  const so = proc(
     function soBody(_x: Box<number>, _a: Box<string>, _b: Box<boolean>) {},
   );
-  const mo = procN()(
+  const mo = procN(
     function moBody(
       [_x, _y]: [Box<number>, Box<string>],
       _a: Box<boolean>,

@@ -22,13 +22,13 @@
  * const pool: ArrayPool = {}!; // some implementation
  * const provide = provider((x) => pool.acquire(x), (x) => pool.release(x));
  *
- * const addProc = proc()(function add(output: number[], lht: number[], rht: number[]) {
+ * const addProc = proc(function add(output: number[], lht: number[], rht: number[]) {
  *   for (let i = 0; i < output.length; i++) {
  *     output[i] = lht[i] + rht[i];
  *   }
  * });
  *
- * const addFunc = toFunc(addProc, (lht, _rht) => pool.acquire(lht.length));
+ * const addFunc = toFunc(addProc, (lht, _rht) => provide(lht.length));
  *
  * const ctx = new Context();
  * async function sum(output: number[], a: number[], b: number[], c: number[]) {
@@ -197,128 +197,100 @@ export type ProcOptions = {
 };
 
 /**
- * Creates an indirect procedure which has a single output. Can be used as a decorator.
+ * Creates an indirect procedure which has a single output.
  * @typeparam O The output type of the indirect procedure.
  * @typeparam I The list of input types of the indirect procedure.
  * @param f The body function of the indirect procedure.
- * @param decoratorContext The decorator context.
  * @param procOptions The options of the proc.
- * @returns A decorator to generate an indirect procedure.
+ * @returns An indirect procedure.
  */
-export function proc(
-  procOptions?: ProcOptions,
-): <O, I extends readonly unknown[]>(
+export function proc<O, I extends readonly unknown[]>(
   f: (output: O, ...inputs: I) => void | Promise<void>,
-  decoratorContext?: DecoratorContext,
-) => (
+  procOptions?: ProcOptions,
+): (
   output: Handle<O>,
   ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => void {
   const middlewares = procOptions?.middlewares ?? [];
 
-  return function decoratorFn<
-    O,
-    I extends readonly unknown[],
-  >(
-    f: (output: O, ...inputs: I) => void | Promise<void>,
-    _decoratorContext?: DecoratorContext,
-  ): (
+  const g = (
     output: Handle<O>,
-    ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
-  ) => void {
-    const g = (
-      output: Handle<O>,
-      ...inputs: MappedHandleType<I>
-    ) => {
-      const plan = getPlan(output, ...inputs);
+    ...inputs: MappedHandleType<I>
+  ) => {
+    const plan = getPlan(output, ...inputs);
 
-      const id = plan[internalPlanKey].generateInvocationID();
-      const body = async () => {
-        const restoredInputs = restoreInputs(plan, inputs);
-        const preparedOutputs = prepareOutput(plan, output);
-        await f(preparedOutputs, ...restoredInputs);
-        decRefArray(plan, inputs);
-        decRef(plan, output);
-      };
-      const invocation: Invocation = {
-        id,
-        inputs,
-        outputs: [output],
-        run: applyMiddlewares(body, middlewares),
-        // calculated on run preparation
-        next: [],
-        numBlockers: 0,
-        numResolvedBlockers: 0,
-      };
-      plan[internalPlanKey].invocations.set(invocation.id, invocation);
+    const id = plan[internalPlanKey].generateInvocationID();
+    const body = async () => {
+      const restoredInputs = restoreInputs(plan, inputs);
+      const preparedOutputs = prepareOutput(plan, output);
+      await f(preparedOutputs, ...restoredInputs);
+      decRefArray(plan, inputs);
+      decRef(plan, output);
     };
-
-    return g;
+    const invocation: Invocation = {
+      id,
+      inputs,
+      outputs: [output],
+      run: applyMiddlewares(body, middlewares),
+      // calculated on run preparation
+      next: [],
+      numBlockers: 0,
+      numResolvedBlockers: 0,
+    };
+    plan[internalPlanKey].invocations.set(invocation.id, invocation);
   };
+
+  return g;
 }
 
 /**
- * Creates an indirect procedure which has multiple outputs. Can be used as a decorator.
+ * Creates an indirect procedure which has multiple outputs.
  * @typeparam O The list of output types of the indirect procedure.
  * @typeparam I The list of input types of the indirect procedure.
  * @param f The body function of the indirect procedure.
- * @param decoratorContext The decorator context.
  * @param procOptions The options of the proc.
- * @returns A decorator to generate an indirect procedure.
+ * @returns An indirect procedure.
  */
-export function procN(
-  procOptions?: ProcOptions,
-): <
+export function procN<
   O extends readonly unknown[],
   I extends readonly unknown[],
 >(
   f: (outputs: O, ...inputs: I) => void | Promise<void>,
-  decoratorContext?: DecoratorContext,
-) => (
+  procOptions?: ProcOptions,
+): (
   outputs: { [key in keyof O]: Handle<O[key]> }, // expanded for readability of inferred type
   ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => void {
   const middlewares = procOptions?.middlewares ?? [];
 
-  return function decoratorFn<
-    O extends readonly unknown[],
-    I extends readonly unknown[],
-  >(
-    f: (outputs: O, ...inputs: I) => void | Promise<void>,
-    _decoratorContext?: DecoratorContext,
-  ): (
-    outputs: { [key in keyof O]: Handle<O[key]> }, // expanded for readability of inferred type
-    ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
-  ) => void {
-    const g = (
-      outputs: MappedHandleType<O>,
-      ...inputs: MappedHandleType<I>
-    ) => {
-      const plan = getPlan(outputs, ...inputs);
+  const g = (
+    outputs: MappedHandleType<O>,
+    ...inputs: MappedHandleType<I>
+  ) => {
+    const plan = getPlan(outputs, ...inputs);
 
-      const id = plan[internalPlanKey].generateInvocationID();
-      const body = async () => {
-        const restoredInputs = restoreInputs(plan, inputs);
-        const preparedOutputs = prepareMultipleOutput(plan, outputs);
-        await f(preparedOutputs, ...restoredInputs);
-        decRefArray(plan, inputs);
-        decRefArray(plan, outputs);
-      };
-      const invocation: Invocation = {
-        id,
-        inputs,
-        outputs,
-        run: applyMiddlewares(body, middlewares),
-        // calculated on run preparation
-        next: [],
-        numBlockers: 0,
-        numResolvedBlockers: 0,
-      };
-      plan[internalPlanKey].invocations.set(invocation.id, invocation);
+    const id = plan[internalPlanKey].generateInvocationID();
+    const body = async () => {
+      const restoredInputs = restoreInputs(plan, inputs);
+      const preparedOutputs = prepareMultipleOutput(plan, outputs);
+      await f(preparedOutputs, ...restoredInputs);
+      decRefArray(plan, inputs);
+      decRefArray(plan, outputs);
     };
-
-    return g;
+    const invocation: Invocation = {
+      id,
+      inputs,
+      outputs,
+      run: applyMiddlewares(body, middlewares),
+      // calculated on run preparation
+      next: [],
+      numBlockers: 0,
+      numResolvedBlockers: 0,
+    };
+    plan[internalPlanKey].invocations.set(invocation.id, invocation);
   };
+
+  return g;
 }
 
 /**

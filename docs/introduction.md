@@ -138,12 +138,12 @@ interface ArrayPool {
 const pool: ArrayPool = { /* some implementation */ };
 const provide = provider((length) => pool.acquire(length), (obj) => pool.release(obj));
 
-const addProc = proc()((output: number[], lht: number[], rht: number[]) => {
+const addProc = proc((output: number[], lht: number[], rht: number[]) => {
   for (let i = 0; i < output.length; i++) {
     output[i] = lht[i] + rht[i];
   }
 });
-const mulProc = proc()((output: number[], lht: number[], rht: number[]) => {
+const mulProc = proc((output: number[], lht: number[], rht: number[]) => {
   for (let i = 0; i < output.length; i++) {
     output[i] = lht[i] * rht[i];
   }
@@ -223,7 +223,7 @@ A `Handle<T>` is an internal reference to a value of type `T` that Proction trac
 To create indirect procedures easily, Proction provides the `proc` utility. You can define `indirectAddProcedure` like this:
 
 ```ts
-const indirectAddProcedure = proc()(
+const indirectAddProcedure = proc(
   function addProcedure(output: number[], lht: number[], rht: number[]) {
     for (let i = 0; i < output.length; i++) {
       output[i] = lht[i] + rht[i];
@@ -294,7 +294,7 @@ You can completely reuse `indirectAddProcedure` and customize the resource manag
 
 ```ts
 const worker: Worker = /* some worker implementation */;
-const indirectAddProcedure = proc()(
+const indirectAddProcedure = proc(
   async function addProcedure(output: number[], lht: number[], rht: number[]) {
     const { promise, resolve } = Promise.withResolvers();
     worker.onmessage = resolve;
@@ -311,17 +311,18 @@ Function-style indirect routines and Proction's task scheduler prevent data race
 Middlewares in Proction are similar to those in other JavaScript libraries. They wrap indirect routines and must invoke the next action in the chain. Middlewares can be installed when you create indirect procedures with `proc`.
 
 ```ts
-const add = proc({
-  middlewares: [async (next) => {
-    console.log("before addProcedure");
-    await next();
-    console.log("after addProcedure");
-  }],
-})(
+const add = proc(
   function addProcedure(output: number[], lht: number[], rht: number[]) {
     for (let i = 0; i < output.length; i++) {
       output[i] = lht[i] + rht[i];
     }
+  },
+  {
+    middlewares: [async (next) => {
+      console.log("before addProcedure");
+      await next();
+      console.log("after addProcedure");
+    }],
   },
 );
 ```
@@ -354,7 +355,7 @@ You can also define more sophisticated middlewares that control the order of exe
 To define a routine with multiple outputs, use `procN` / `toFuncN`. The output argument and return value are tuple-like arrays. You can use multiple-output routines in the same way as the single-output ones.
 
 ```ts
-const sincosProc = procN()(([sinOutput, cosOutput]: [number[], number[]], x: number[]) => {
+const sincosProc = procN(([sinOutput, cosOutput]: [number[], number[]], x: number[]) => {
   for (let i = 0; i < sinOutput.length; i++) {
     sinOutput[i] = Math.sin(x[i]);
     cosOutput[i] = Math.cos(x[i]);

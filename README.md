@@ -41,7 +41,7 @@ const provide = provider(
   (x) => pool.release(x),
 );
 
-const addProc = proc()(
+const addProc = proc(
   function add(output: number[], lht: number[], rht: number[]) {
     for (let i = 0; i < output.length; i++) {
       output[i] = lht[i] + rht[i];
