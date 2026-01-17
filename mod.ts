@@ -542,6 +542,144 @@ export function procNI1<
 }
 
 /**
+ * Creates an indirect procedure which has multiple outputs combining an in-place
+ * implementation and an out-of-place implementation.
+ * All input-output pairs specified by `IO` can be processed in-place when all inputs are
+ * not referenced from other places.
+ * @typeparam IO A tuple type representing input-output pairs that can be processed in-place.
+ * @typeparam I The tuple type of additional input types that are not processed in-place.
+ * @param fOutOfPlace The body function of the out-of-place procedure.
+ * @param fInPlace The body function of the in-place procedure.
+ * @param procOptions The options of the proc.
+ * @returns An indirect procedure.
+ */
+export function procNIAll<
+  IO extends readonly unknown[],
+  I extends readonly unknown[],
+>(
+  fOutOfPlace: (
+    outputs: IO,
+    ...inputs: [...IO, ...I]
+  ) => void | Promise<void>,
+  fInPlace: (
+    inout: IO,
+    ...restInputs: I
+  ) => void | Promise<void>,
+  procOptions?: ProcOptions,
+): (
+  outputs: { [key in keyof IO]: Handle<IO[key]> }, // expanded for readability of inferred type
+  ...restInputs: [
+    ...{ [key in keyof IO]: Handle<IO[key]> },
+    ...{ [key in keyof I]: Handle<I[key]> },
+  ] // expanded for readability of inferred type
+) => void {
+  const middlewares = procOptions?.middlewares ?? [];
+
+  const g = (
+    outputs: MappedHandleType<IO>,
+    ...restInputs: [...MappedHandleType<IO>, ...MappedHandleType<I>]
+  ) => {
+    const plan = getPlan(outputs, ...restInputs);
+
+    const ioLength = outputs.length;
+    const ioInputs = restInputs.slice(0, ioLength) as MappedHandleType<IO>;
+    const additionalInputs = restInputs.slice(ioLength) as MappedHandleType<I>;
+
+    const id = plan[internalPlanKey].generateInvocationID();
+
+    const bodyOutOfPlace = async () => {
+      const restoredIoInputs = restoreInputs(plan, ioInputs);
+      const restoredAdditionalInputs = restoreInputs(plan, additionalInputs);
+      const preparedOutputs = prepareMultipleOutput(plan, outputs) as IO;
+      await fOutOfPlace(
+        preparedOutputs,
+        ...(restoredIoInputs as [...IO]),
+        ...(restoredAdditionalInputs as [...I]),
+      );
+      decRefArray(plan, ioInputs);
+      decRefArray(plan, additionalInputs);
+      decRefArray(plan, outputs);
+    };
+
+    const bodyInPlace = async () => {
+      const restoredAdditionalInputs = restoreInputs(plan, additionalInputs);
+      const restoredInOuts = [];
+      for (let i = 0; i < ioLength; i++) {
+        restoredInOuts.push(transferInOut(plan, ioInputs[i], outputs[i]));
+      }
+      await fInPlace(
+        restoredInOuts as unknown as IO,
+        ...(restoredAdditionalInputs as [...I]),
+      );
+      decRefArray(plan, additionalInputs);
+      decRefArray(plan, outputs);
+    };
+
+    const resolveBody = (ctx: ResolveContext): () => Promise<void> => {
+      let canInPlace = true;
+
+      for (let i = 0; i < ioLength; i++) {
+        const ioInput = ioInputs[i];
+        const ioOutput = outputs[i];
+
+        const inputCount = ctx.inputConsumerCounts.get(ioInput[handleIdKey]);
+        if (inputCount == null) {
+          throw new LogicError(
+            `the input consumer count for input handle is not calculated: ${ioInput}`,
+          );
+        }
+
+        if (inputCount !== 1) {
+          canInPlace = false;
+          break;
+        }
+
+        const inputSlot = ctx.plan[internalPlanKey].dataSlots.get(
+          ioInput[handleIdKey],
+        );
+        if (inputSlot == null) {
+          throw new LogicError(`dataSlot not found for handle: ${ioInput}`);
+        }
+
+        const outputSlot = ctx.plan[internalPlanKey].dataSlots.get(
+          ioOutput[handleIdKey],
+        );
+        if (outputSlot == null) {
+          throw new LogicError(`dataSlot not found for handle: ${ioOutput}`);
+        }
+
+        if (
+          inputSlot.type !== "intermediate" ||
+          outputSlot.type !== "intermediate"
+        ) {
+          canInPlace = false;
+          break;
+        }
+      }
+
+      if (canInPlace) {
+        return applyMiddlewares(bodyInPlace, middlewares);
+      }
+      return applyMiddlewares(bodyOutOfPlace, middlewares);
+    };
+
+    const invocation: Invocation = {
+      id,
+      inputs: [...ioInputs, ...additionalInputs],
+      outputs: outputs as unknown as UntypedHandle[],
+      resolveBody,
+      next: [],
+      numBlockers: 0,
+      numResolvedBlockers: 0,
+      body: null,
+    };
+    plan[internalPlanKey].invocations.set(invocation.id, invocation);
+  };
+
+  return g;
+}
+
+/**
  * Converts an indirect procedure which has a single output to an indirect function.
  * @typeparam O The output type of the indirect procedure and the return type of the indirect function.
  * @typeparam I The list of input types of the indirect procedure and the indirect function.

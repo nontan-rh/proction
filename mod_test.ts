@@ -14,6 +14,7 @@ import {
   procI,
   procN,
   procNI1,
+  procNIAll,
   type ProvideFn,
   provider,
   run,
@@ -844,6 +845,305 @@ Deno.test(async function procNI1InPlace(t) {
   });
 });
 
+Deno.test(async function procNIAllInPlace(t) {
+  const arrayPool = createNumberArrayTestPool();
+  const boxPool = createBoxedNumberTestPool();
+
+  function getDualNormalizer() {
+    const variantsUsed: string[] = [];
+
+    const normalizeDual = procNIAll(
+      function outOfPlace(
+        [normalizedA, normalizedB]: [number[], number[]],
+        inputA: number[],
+        inputB: number[],
+      ) {
+        variantsUsed.push("out-of-place");
+        const normA = Math.sqrt(inputA.reduce((s, x) => s + x * x, 0));
+        const normB = Math.sqrt(inputB.reduce((s, x) => s + x * x, 0));
+        for (let i = 0; i < inputA.length; i++) {
+          normalizedA[i] = inputA[i] / normA;
+        }
+        for (let i = 0; i < inputB.length; i++) {
+          normalizedB[i] = inputB[i] / normB;
+        }
+      },
+      function inPlace([inoutA, inoutB]: [number[], number[]]) {
+        variantsUsed.push("in-place");
+        const normA = Math.sqrt(inoutA.reduce((s, x) => s + x * x, 0));
+        const normB = Math.sqrt(inoutB.reduce((s, x) => s + x * x, 0));
+        for (let i = 0; i < inoutA.length; i++) {
+          inoutA[i] /= normA;
+        }
+        for (let i = 0; i < inoutB.length; i++) {
+          inoutB[i] /= normB;
+        }
+      },
+    );
+
+    const pureNormalizeDual = toFuncN(normalizeDual, [
+      (inputA) => arrayPool.provide(inputA.length),
+      (_, inputB) => arrayPool.provide(inputB.length),
+    ]);
+
+    const getVariantsUsed = () => variantsUsed;
+
+    return { normalizeDual, pureNormalizeDual, getVariantsUsed };
+  }
+
+  const scale = proc(
+    function scaleBody(result: number[], input: number[], factor: Box<number>) {
+      for (let i = 0; i < input.length; i++) {
+        result[i] = input[i] * factor.value;
+      }
+    },
+  );
+  const pureScale = toFunc(scale, (input) => arrayPool.provide(input.length));
+
+  const add = proc(
+    function addBody(result: number[], l: number[], r: number[]) {
+      const minLength = Math.min(result.length, l.length, r.length);
+      for (let i = 0; i < minLength; i++) {
+        result[i] = l[i] + r[i];
+      }
+    },
+  );
+  const pureAdd = toFunc(
+    add,
+    (l, r) => arrayPool.provide(Math.min(l.length, r.length)),
+  );
+
+  await t.step(async function inPlaceBothSingleConsumer() {
+    const { pureNormalizeDual, getVariantsUsed } = getDualNormalizer();
+
+    const resultABody = [0, 0];
+    const resultBBody = [0, 0];
+    await run(new Context(contextOptions), ({ $s, $d }) => {
+      const intermediateA = pureScale($s([3, 4]), $s(Box.withValue(1)));
+      const intermediateB = pureScale($s([5, 12]), $s(Box.withValue(1)));
+      const [normalizedA, normalizedB] = pureNormalizeDual(
+        intermediateA,
+        intermediateB,
+      );
+      scale($d(resultABody), normalizedA, $s(Box.withValue(1)));
+      scale($d(resultBBody), normalizedB, $s(Box.withValue(1)));
+    });
+
+    assertEquals(resultABody[0], 3 / 5);
+    assertEquals(resultABody[1], 4 / 5);
+    assertEquals(resultBBody[0], 5 / 13);
+    assertEquals(resultBBody[1], 12 / 13);
+    assertEquals(getVariantsUsed(), ["in-place"]);
+    arrayPool.assertNoError();
+    boxPool.assertNoError();
+  });
+
+  await t.step(async function sourceInputFallsBackToOutOfPlace() {
+    const { pureNormalizeDual, getVariantsUsed } = getDualNormalizer();
+
+    const resultABody = [0, 0];
+    const resultBBody = [0, 0];
+    await run(new Context(contextOptions), ({ $s, $d }) => {
+      const intermediateB = pureScale($s([5, 12]), $s(Box.withValue(1)));
+      const [normalizedA, normalizedB] = pureNormalizeDual(
+        $s([3, 4]),
+        intermediateB,
+      );
+      scale($d(resultABody), normalizedA, $s(Box.withValue(1)));
+      scale($d(resultBBody), normalizedB, $s(Box.withValue(1)));
+    });
+
+    assertEquals(resultABody[0], 3 / 5);
+    assertEquals(resultABody[1], 4 / 5);
+    assertEquals(resultBBody[0], 5 / 13);
+    assertEquals(resultBBody[1], 12 / 13);
+    assertEquals(getVariantsUsed(), ["out-of-place"]);
+    arrayPool.assertNoError();
+    boxPool.assertNoError();
+  });
+
+  await t.step(async function destinationOutputFallsBackToOutOfPlace() {
+    const { normalizeDual, getVariantsUsed } = getDualNormalizer();
+
+    const resultABody = [0, 0];
+    const resultBBody = [0, 0];
+    await run(new Context(contextOptions), ({ $s, $d }) => {
+      const intermediateA = pureScale($s([3, 4]), $s(Box.withValue(1)));
+      const intermediateB = pureScale($s([5, 12]), $s(Box.withValue(1)));
+      normalizeDual(
+        [$d(resultABody), $d(resultBBody)],
+        intermediateA,
+        intermediateB,
+      );
+    });
+
+    assertEquals(resultABody[0], 3 / 5);
+    assertEquals(resultABody[1], 4 / 5);
+    assertEquals(resultBBody[0], 5 / 13);
+    assertEquals(resultBBody[1], 12 / 13);
+    assertEquals(getVariantsUsed(), ["out-of-place"]);
+    arrayPool.assertNoError();
+    boxPool.assertNoError();
+  });
+
+  await t.step(async function oneOutputIsGlobalFallsBackToOutOfPlace() {
+    const { normalizeDual, getVariantsUsed } = getDualNormalizer();
+
+    const resultABody = [0, 0];
+    const resultBBody = [0, 0];
+    await run(new Context(contextOptions), ({ $s, $d, $i }) => {
+      const intermediateA = pureScale($s([3, 4]), $s(Box.withValue(1)));
+      const intermediateB = pureScale($s([5, 12]), $s(Box.withValue(1)));
+      const outputA = $i(() => arrayPool.provide(2));
+      normalizeDual(
+        [outputA, $d(resultBBody)],
+        intermediateA,
+        intermediateB,
+      );
+      scale($d(resultABody), outputA, $s(Box.withValue(1)));
+    });
+
+    assertEquals(resultABody[0], 3 / 5);
+    assertEquals(resultABody[1], 4 / 5);
+    assertEquals(resultBBody[0], 5 / 13);
+    assertEquals(resultBBody[1], 12 / 13);
+    assertEquals(getVariantsUsed(), ["out-of-place"]);
+    arrayPool.assertNoError();
+    boxPool.assertNoError();
+  });
+
+  await t.step(async function multipleConsumersFallsBackToOutOfPlace() {
+    const { pureNormalizeDual, getVariantsUsed } = getDualNormalizer();
+
+    const result1ABody = [0, 0];
+    const result1BBody = [0, 0];
+    const result2ABody = [0, 0];
+    const result2BBody = [0, 0];
+
+    await run(new Context(contextOptions), ({ $s, $d }) => {
+      const intermediateA = pureScale($s([3, 4]), $s(Box.withValue(1)));
+      const intermediateB = pureScale($s([5, 12]), $s(Box.withValue(1)));
+      const [normalized1A, normalized1B] = pureNormalizeDual(
+        intermediateA,
+        intermediateB,
+      );
+      const [normalized2A, normalized2B] = pureNormalizeDual(
+        intermediateA,
+        intermediateB,
+      );
+      scale($d(result1ABody), normalized1A, $s(Box.withValue(1)));
+      scale($d(result1BBody), normalized1B, $s(Box.withValue(1)));
+      scale($d(result2ABody), normalized2A, $s(Box.withValue(1)));
+      scale($d(result2BBody), normalized2B, $s(Box.withValue(1)));
+    });
+
+    assertEquals(result1ABody[0], 3 / 5);
+    assertEquals(result1ABody[1], 4 / 5);
+    assertEquals(result1BBody[0], 5 / 13);
+    assertEquals(result1BBody[1], 12 / 13);
+    assertEquals(result2ABody[0], 3 / 5);
+    assertEquals(result2ABody[1], 4 / 5);
+    assertEquals(result2BBody[0], 5 / 13);
+    assertEquals(result2BBody[1], 12 / 13);
+    assertEquals(getVariantsUsed(), ["out-of-place", "out-of-place"]);
+    arrayPool.assertNoError();
+    boxPool.assertNoError();
+  });
+
+  await t.step(async function chainedInPlace() {
+    const { pureNormalizeDual, getVariantsUsed } = getDualNormalizer();
+
+    const resultABody = [0, 0];
+    const resultBBody = [0, 0];
+
+    await run(new Context(contextOptions), ({ $s, $d }) => {
+      const intermediate1A = pureAdd($s([3, 0]), $s([0, 4]));
+      const intermediate1B = pureAdd($s([5, 0]), $s([0, 12]));
+      const [normalized1A, normalized1B] = pureNormalizeDual(
+        intermediate1A,
+        intermediate1B,
+      );
+      const [normalized2A, normalized2B] = pureNormalizeDual(
+        normalized1A,
+        normalized1B,
+      );
+      scale($d(resultABody), normalized2A, $s(Box.withValue(10)));
+      scale($d(resultBBody), normalized2B, $s(Box.withValue(13)));
+    });
+
+    assertEquals(resultABody[0], 6);
+    assertEquals(resultABody[1], 8);
+    assertEquals(resultBBody[0], 5);
+    assertEquals(resultBBody[1], 12);
+    assertEquals(getVariantsUsed(), ["in-place", "in-place"]);
+    arrayPool.assertNoError();
+    boxPool.assertNoError();
+  });
+
+  await t.step(async function withRestInputs() {
+    const variantsUsed: string[] = [];
+
+    const scaleTwo = procNIAll(
+      function outOfPlace(
+        [scaledA, scaledB]: [number[], number[]],
+        inputA: number[],
+        inputB: number[],
+        factorA: Box<number>,
+        factorB: Box<number>,
+      ) {
+        variantsUsed.push("out-of-place");
+        for (let i = 0; i < inputA.length; i++) {
+          scaledA[i] = inputA[i] * factorA.value;
+        }
+        for (let i = 0; i < inputB.length; i++) {
+          scaledB[i] = inputB[i] * factorB.value;
+        }
+      },
+      function inPlace(
+        [inoutA, inoutB]: [number[], number[]],
+        factorA: Box<number>,
+        factorB: Box<number>,
+      ) {
+        variantsUsed.push("in-place");
+        for (let i = 0; i < inoutA.length; i++) {
+          inoutA[i] *= factorA.value;
+        }
+        for (let i = 0; i < inoutB.length; i++) {
+          inoutB[i] *= factorB.value;
+        }
+      },
+    );
+
+    const pureScaleTwo = toFuncN(scaleTwo, [
+      (inputA) => arrayPool.provide(inputA.length),
+      (_, inputB) => arrayPool.provide(inputB.length),
+    ]);
+
+    const resultABody = [0, 0];
+    const resultBBody = [0, 0];
+    await run(new Context(contextOptions), ({ $s, $d }) => {
+      const intermediateA = pureAdd($s([1, 2]), $s([0, 0]));
+      const intermediateB = pureAdd($s([3, 4]), $s([0, 0]));
+      const [scaledA, scaledB] = pureScaleTwo(
+        intermediateA,
+        intermediateB,
+        $s(Box.withValue(2)),
+        $s(Box.withValue(3)),
+      );
+      scale($d(resultABody), scaledA, $s(Box.withValue(1)));
+      scale($d(resultBBody), scaledB, $s(Box.withValue(1)));
+    });
+
+    assertEquals(resultABody[0], 2);
+    assertEquals(resultABody[1], 4);
+    assertEquals(resultBBody[0], 9);
+    assertEquals(resultBBody[1], 12);
+    assertEquals(variantsUsed, ["in-place"]);
+    arrayPool.assertNoError();
+    boxPool.assertNoError();
+  });
+});
+
 Deno.test(function types() {
   const so = proc(
     function soBody(_x: Box<number>, _a: Box<string>, _b: Box<boolean>) {},
@@ -922,6 +1222,45 @@ Deno.test(function types() {
       _c: Box<string>,
     ) {},
   );
+  // procNIAll
+  const moiAll = procNIAll(
+    function moiAllOutOfPlace(
+      [_x, _y]: [Box<number>, Box<string>],
+      _a: Box<number>,
+      _b: Box<string>,
+      _c: Box<boolean>,
+      _d: Box<bigint>,
+    ) {},
+    function moiAllInPlace(
+      [_x, _y]: [Box<number>, Box<string>],
+      _c: Box<boolean>,
+      _d: Box<bigint>,
+    ) {},
+  );
+  procNIAll(
+    function moiAllOutOfPlace(
+      [_x, _y]: [Box<number>, Box<string>],
+      _a: Box<number>,
+      _b: Box<string>,
+    ) {},
+    // @ts-expect-error: inout type conflicts with outputs/IO inputs type
+    function moiAllInPlace([_x, _y]: [Box<string>, Box<string>]) {},
+  );
+  procNIAll(
+    // @ts-expect-error: rest input types conflict with fInPlace
+    function moiAllOutOfPlace(
+      [_x, _y]: [Box<number>, Box<string>],
+      _a: Box<number>,
+      _b: Box<string>,
+      _c: Box<boolean>,
+      _d: Box<bigint>,
+    ) {},
+    function moiAllInPlace(
+      [_x, _y]: [Box<number>, Box<string>],
+      _c: Box<bigint>,
+      _d: Box<boolean>,
+    ) {},
+  );
   const sop = toFunc(
     so,
     (_a: Box<string>, _b: Box<boolean>) =>
@@ -964,6 +1303,15 @@ Deno.test(function types() {
       testValue<Handle<Box<number>>>(),
       testValue<Handle<Box<string>>>(),
       testValue<Handle<Box<boolean>>>(),
+    );
+
+    // moiAll: OK
+    moiAll(
+      [testValue<Handle<Box<number>>>(), testValue<Handle<Box<string>>>()],
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<bigint>>>(),
     );
 
     // sop: OK
@@ -1260,6 +1608,89 @@ Deno.test(function types() {
       testValue<Handle<Box<number>>>(),
       testValue<Handle<Box<string>>>(),
       testValue<Handle<Box<boolean>>>(),
+    );
+
+    // moiAll: NG
+    moiAll(
+      // @ts-expect-error: 1st output type is wrong
+      [testValue<Handle<Box<symbol>>>(), testValue<Handle<Box<string>>>()],
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<bigint>>>(),
+    );
+    moiAll(
+      // @ts-expect-error: 2nd output type is wrong
+      [testValue<Handle<Box<number>>>(), testValue<Handle<Box<symbol>>>()],
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<bigint>>>(),
+    );
+    moiAll(
+      [testValue<Handle<Box<number>>>(), testValue<Handle<Box<string>>>()],
+      // @ts-expect-error: 1st IO input type is wrong
+      testValue<Handle<Box<symbol>>>(),
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<bigint>>>(),
+    );
+    moiAll(
+      [testValue<Handle<Box<number>>>(), testValue<Handle<Box<string>>>()],
+      testValue<Handle<Box<number>>>(),
+      // @ts-expect-error: 2nd IO input type is wrong
+      testValue<Handle<Box<symbol>>>(),
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<bigint>>>(),
+    );
+    moiAll(
+      [testValue<Handle<Box<number>>>(), testValue<Handle<Box<string>>>()],
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+      // @ts-expect-error: 1st rest input type is wrong
+      testValue<Handle<Box<symbol>>>(),
+      testValue<Handle<Box<bigint>>>(),
+    );
+    moiAll(
+      [testValue<Handle<Box<number>>>(), testValue<Handle<Box<string>>>()],
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
+      // @ts-expect-error: 2nd rest input type is wrong
+      testValue<Handle<Box<symbol>>>(),
+    );
+    // @ts-expect-error: insufficient args
+    moiAll(
+      [testValue<Handle<Box<number>>>(), testValue<Handle<Box<string>>>()],
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
+    );
+    moiAll(
+      [testValue<Handle<Box<number>>>(), testValue<Handle<Box<string>>>()],
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<bigint>>>(),
+      // @ts-expect-error: excessive args
+      // deno-lint-ignore no-explicit-any
+      testValue<Handle<Box<any>>>(),
+    );
+    moiAll(
+      [testValue<Handle<Box<number>>>(), testValue<Handle<Box<string>>>()],
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+      // @ts-expect-error: rest args swapped
+      testValue<Handle<Box<bigint>>>(),
+      testValue<Handle<Box<boolean>>>(),
+    );
+    moiAll(
+      // @ts-expect-error: outputs and IO inputs type mismatch
+      [testValue<Handle<Box<string>>>(), testValue<Handle<Box<number>>>()],
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<bigint>>>(),
     );
   });
 });
