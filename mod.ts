@@ -196,6 +196,24 @@ export type ProcOptions = {
   middlewares?: MiddlewareFn[];
 };
 
+// NOTE: The order of preparing outputs and restoring inputs is important,
+// especially for in-place routines.
+//
+// `transferInOut()` extracts the managed object from `inHandle`'s DelayedRc,
+// invalidating the input handle (it becomes "freed"). After this point,
+// any later attempt to `restore(plan, inHandle)` will throw.
+//
+// This matters because "output preparation" may indirectly restore inputs.
+// For example, outputs created by `toFunc()`/`toFuncN()` have provide closures
+// that call `restoreInputs(plan, inputs)` to allocate the output objects.
+// That restoration can include the to-be-transferred input handle, even
+// if the provide function ignores that parameter.
+//
+// Therefore, for in-place bodies that use `transferInOut()`:
+// - prepare any other outputs that might restore `inHandle` first
+// - restore other inputs next
+// - call `transferInOut` last, right before invoking user code
+
 /**
  * Creates an indirect procedure which has a single output.
  * @typeparam O The output type of the indirect procedure.
@@ -288,8 +306,8 @@ export function procI<IO, I extends readonly unknown[]>(
     };
 
     const bodyInPlace = async () => {
-      const restoredInOut0 = transferInOut(plan, input0, output);
       const restoredRestInputs = restoreInputs(plan, restInputs);
+      const restoredInOut0 = transferInOut(plan, input0, output);
       await fInPlace(restoredInOut0, ...restoredRestInputs);
       // the content of input0 is already transferred to the output
       // decRef(plan, input0);
@@ -385,6 +403,132 @@ export function procN<
       inputs,
       outputs,
       resolveBody: () => applyMiddlewares(body, middlewares),
+      // calculated on run preparation
+      next: [],
+      numBlockers: 0,
+      numResolvedBlockers: 0,
+      body: null,
+    };
+    plan[internalPlanKey].invocations.set(invocation.id, invocation);
+  };
+
+  return g;
+}
+
+/**
+ * Creates an indirect procedure which has multiple outputs combining an in-place
+ * implementation and an out-of-place implementation.
+ * The first input and first output can be processed in-place when conditions are met.
+ * @typeparam IO The first input type and first output type of the indirect procedure.
+ * @typeparam O The list of rest output types of the indirect procedure.
+ * @typeparam I The list of rest input types of the indirect procedure.
+ * @param fOutOfPlace The body function of the indirect out-of-place procedure.
+ * @param fInPlace The body function of the indirect in-place procedure.
+ * @param procOptions The options of the proc.
+ * @returns An indirect procedure.
+ */
+export function procNI1<
+  IO,
+  O extends readonly unknown[],
+  I extends readonly unknown[],
+>(
+  fOutOfPlace: (
+    outputs: [IO, ...O],
+    input0: IO,
+    ...restInputs: I
+  ) => void | Promise<void>,
+  fInPlace: (
+    inout: IO,
+    restOutputs: O,
+    ...restInputs: I
+  ) => void | Promise<void>,
+  procOptions?: ProcOptions,
+): (
+  outputs: [Handle<IO>, ...{ [key in keyof O]: Handle<O[key]> }], // expanded for readability of inferred type
+  input0: Handle<IO>,
+  ...restInputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
+) => void {
+  const middlewares = procOptions?.middlewares ?? [];
+
+  const g = (
+    outputs: [Handle<IO>, ...MappedHandleType<O>],
+    input0: Handle<IO>,
+    ...restInputs: MappedHandleType<I>
+  ) => {
+    const plan = getPlan(outputs, input0, ...restInputs);
+
+    const output0 = outputs[0];
+    const restOutputs = outputs.slice(1) as MappedHandleType<O>;
+
+    const id = plan[internalPlanKey].generateInvocationID();
+    const bodyOutOfPlace = async () => {
+      const restoredInput0 = restore(plan, input0);
+      const restoredRestInputs = restoreInputs(plan, restInputs);
+      const preparedOutputs = prepareMultipleOutput(plan, outputs) as [
+        IO,
+        ...O,
+      ];
+      await fOutOfPlace(preparedOutputs, restoredInput0, ...restoredRestInputs);
+      decRef(plan, input0);
+      decRefArray(plan, restInputs);
+      decRefArray(plan, outputs);
+    };
+
+    const bodyInPlace = async () => {
+      const preparedRestOutputs = prepareMultipleOutput(
+        plan,
+        restOutputs,
+      ) as O;
+      const restoredRestInputs = restoreInputs(plan, restInputs);
+      const restoredInOut0 = transferInOut(plan, input0, output0);
+      await fInPlace(
+        restoredInOut0,
+        preparedRestOutputs,
+        ...restoredRestInputs,
+      );
+      // the content of input0 is already transferred to the output
+      // decRef(plan, input0);
+      decRefArray(plan, restInputs);
+      decRefArray(plan, outputs);
+    };
+
+    const resolveBody = (ctx: ResolveContext): () => Promise<void> => {
+      const input0Count = ctx.inputConsumerCounts.get(input0[handleIdKey]);
+      if (input0Count == null) {
+        throw new LogicError(
+          `the input consumer count for input handle is not calculated: ${input0}`,
+        );
+      }
+
+      if (input0Count === 1) {
+        const input0Slot = ctx.plan[internalPlanKey].dataSlots.get(
+          input0[handleIdKey],
+        );
+        if (input0Slot == null) {
+          throw new LogicError(`dataSlot not found for handle: ${input0}`);
+        }
+        const output0Slot = ctx.plan[internalPlanKey].dataSlots.get(
+          output0[handleIdKey],
+        );
+        if (output0Slot == null) {
+          throw new LogicError(`dataSlot not found for handle: ${output0}`);
+        }
+
+        if (
+          input0Slot.type === "intermediate" &&
+          output0Slot.type === "intermediate"
+        ) {
+          return applyMiddlewares(bodyInPlace, middlewares);
+        }
+      }
+      return applyMiddlewares(bodyOutOfPlace, middlewares);
+    };
+
+    const invocation: Invocation = {
+      id,
+      inputs: [input0, ...restInputs],
+      outputs,
+      resolveBody,
       // calculated on run preparation
       next: [],
       numBlockers: 0,
@@ -843,6 +987,7 @@ async function runPlan(
         runningInvocations.delete(invocation.id);
         notify();
       }, (_: unknown) => {
+        // TODO: Internal errors come here. Notify the error to the user.
         runningInvocations.delete(invocation.id);
         notify();
       });
