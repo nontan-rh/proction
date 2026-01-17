@@ -91,6 +91,28 @@ export class DelayedRc<T> {
     return this.#count <= 0;
   }
 
+  /**
+   * Checks if the reference counter equals to one.
+   * @returns True if the reference counter equals to one, false otherwise.
+   */
+  get hasOneRef(): boolean {
+    return this.#count === 1;
+  }
+
+  /**
+   * Extracts ownership of the managed object without triggering destruction.
+   * After this call, the container is invalidated.
+   * @returns The managed object.
+   */
+  extract(): T {
+    this.#assertHasOneRef();
+
+    const obj = this.#managedObject!;
+    this.#managedObject = undefined;
+    this.#count = 0;
+    return obj;
+  }
+
   #assertNotInitialized(): void {
     if (this.#initialized) {
       throw new LogicError("this reference counter is already initialized");
@@ -100,6 +122,15 @@ export class DelayedRc<T> {
   #assertNotFreed(): void {
     if (this.isFreed) {
       throw new LogicError("this reference counter is already freed");
+    }
+  }
+
+  #assertHasOneRef(): void {
+    if (!this.#initialized) {
+      throw new LogicError("this reference counter is not initialized yet");
+    }
+    if (!this.hasOneRef) {
+      throw new LogicError("this reference counter is not one");
     }
   }
 

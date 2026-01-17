@@ -11,6 +11,7 @@ import {
   type DisposableWrap,
   type Handle,
   proc,
+  procI,
   procN,
   type ProvideFn,
   provider,
@@ -388,6 +389,28 @@ Deno.test(async function middleware(t) {
       }],
     },
   );
+  const doubleLog: string[] = [];
+  const double = procI(
+    function doubleOutOfPlace(output: Box<number>, input0: Box<number>) {
+      doubleLog.push("out-of-place");
+      output.value = input0.value * 2;
+    },
+    function doubleInPlace(inout: Box<number>) {
+      doubleLog.push("in-place");
+      inout.value = inout.value * 2;
+    },
+    {
+      middlewares: [async (next) => {
+        doubleLog.push("1 before");
+        await next();
+        doubleLog.push("1 after");
+      }, async (next) => {
+        doubleLog.push("2 before");
+        await next();
+        doubleLog.push("2 after");
+      }],
+    },
+  );
 
   await t.step(async function single() {
     const output = new Box<number>();
@@ -414,6 +437,182 @@ Deno.test(async function middleware(t) {
     assertEquals(output2.value, 2);
     assertEquals(divmodLog, ["1 before", "2 before", "2 after", "1 after"]);
   });
+
+  await t.step(async function inPlaceSingle() {
+    const testPool = createBoxedNumberTestPool();
+    const output = new Box<number>();
+
+    await run(new Context(contextOptions), ({ $s, $d, $i }) => {
+      const input = $s(Box.withValue(1));
+      const intermediate1 = $i(() => testPool.provide());
+      const intermediate2 = $i(() => testPool.provide());
+      double(intermediate1, input);
+      double(intermediate2, intermediate1);
+      double($d(output), intermediate2);
+    });
+
+    assertEquals(output.value, 8);
+    assertEquals(doubleLog, [
+      "1 before",
+      "2 before",
+      "out-of-place",
+      "2 after",
+      "1 after",
+      "1 before",
+      "2 before",
+      "in-place",
+      "2 after",
+      "1 after",
+      "1 before",
+      "2 before",
+      "out-of-place",
+      "2 after",
+      "1 after",
+    ]);
+    testPool.assertNoError();
+  });
+});
+
+Deno.test(async function procIInPlace(t) {
+  const testPool = createBoxedNumberTestPool();
+
+  function getDoubler() {
+    const variantsUsed: string[] = [];
+
+    const double = procI(
+      function doubleOutOfPlace(output: Box<number>, input0: Box<number>) {
+        variantsUsed.push("out-of-place");
+        output.value = input0.value * 2;
+      },
+      function doubleInPlace(inout: Box<number>) {
+        variantsUsed.push("in-place");
+        inout.value = inout.value * 2;
+      },
+    );
+
+    const pureDouble = toFunc(double, () => testPool.provide());
+
+    const getVariantsUsed = () => variantsUsed;
+
+    return { double, pureDouble, getVariantsUsed };
+  }
+
+  const add = proc(
+    function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
+      result.value = l.value + r.value;
+    },
+  );
+  const pureAdd = toFunc(add, () => testPool.provide());
+
+  await t.step(async function inPlaceSingleConsumer() {
+    const { pureDouble, getVariantsUsed } = getDoubler();
+
+    const resultBody = new Box<number>();
+    await run(new Context(contextOptions), ({ $s, $d }) => {
+      const result = $d(resultBody);
+      const a = pureAdd($s(Box.withValue(10)), $s(Box.withValue(11)));
+      const b = pureDouble(a);
+      add(result, b, $s(Box.withValue(1)));
+    });
+
+    assertEquals(resultBody.value, 43);
+    assertEquals(getVariantsUsed(), ["in-place"]);
+    testPool.assertNoError();
+  });
+
+  await t.step(async function sourceInputFallsBackToOutOfPlace() {
+    const { pureDouble, getVariantsUsed } = getDoubler();
+
+    const resultBody = new Box<number>();
+    await run(new Context(contextOptions), ({ $s, $d }) => {
+      const result = $d(resultBody);
+      const a = $s(Box.withValue(21));
+      const b = pureDouble(a);
+      add(result, b, $s(Box.withValue(1)));
+    });
+
+    assertEquals(resultBody.value, 43);
+    assertEquals(getVariantsUsed(), ["out-of-place"]);
+    testPool.assertNoError();
+  });
+
+  await t.step(async function destinationOutputFallsBackToOutOfPlace() {
+    const { double, getVariantsUsed } = getDoubler();
+
+    const resultBody = new Box<number>();
+    await run(new Context(contextOptions), ({ $s, $d }) => {
+      const result = $d(resultBody);
+      const a = pureAdd($s(Box.withValue(10)), $s(Box.withValue(11)));
+      double(result, a);
+    });
+
+    assertEquals(resultBody.value, 42);
+    assertEquals(getVariantsUsed(), ["out-of-place"]);
+    testPool.assertNoError();
+  });
+
+  await t.step(async function multipleConsumersAllUseOutOfPlace() {
+    const { pureDouble, getVariantsUsed } = getDoubler();
+
+    const result1Body = new Box<number>();
+    const result2Body = new Box<number>();
+
+    await run(new Context(contextOptions), ({ $s, $d }) => {
+      const result1 = $d(result1Body);
+      const result2 = $d(result2Body);
+      const a = pureAdd($s(Box.withValue(10)), $s(Box.withValue(11)));
+      const b = pureDouble(a);
+      const c = pureDouble(a);
+      add(result1, b, $s(Box.withValue(1)));
+      add(result2, c, $s(Box.withValue(2)));
+    });
+
+    assertEquals(result1Body.value, 43);
+    assertEquals(result2Body.value, 44);
+    assertEquals(getVariantsUsed(), ["out-of-place", "out-of-place"]);
+    testPool.assertNoError();
+  });
+});
+
+Deno.test(async function procIWithRestInputs() {
+  const testPool = createBoxedNumberTestPool();
+  let variantUsed = "";
+
+  const mul = procI(
+    function addScalarOutOfPlace(
+      output: Box<number>,
+      input0: Box<number>,
+      input1: Box<number>,
+    ) {
+      variantUsed = "out-of-place";
+      output.value = input0.value * input1.value;
+    },
+    function addScalarInPlace(inout: Box<number>, input1: Box<number>) {
+      variantUsed = "in-place";
+      inout.value = inout.value * input1.value;
+    },
+  );
+  const pureMul = toFunc(mul, () => testPool.provide());
+
+  const add = proc(
+    function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
+      result.value = l.value + r.value;
+    },
+  );
+  const pureAdd = toFunc(add, () => testPool.provide());
+
+  const resultBody = new Box<number>();
+
+  await run(new Context(contextOptions), ({ $s, $d }) => {
+    const result = $d(resultBody);
+    const a = pureAdd($s(Box.withValue(10)), $s(Box.withValue(20)));
+    const b = pureMul(a, $s(Box.withValue(5)));
+    add(result, b, $s(Box.withValue(1)));
+  });
+
+  assertEquals(resultBody.value, 151);
+  assertEquals(variantUsed, "in-place");
+  testPool.assertNoError();
 });
 
 Deno.test(function types() {
@@ -425,6 +624,35 @@ Deno.test(function types() {
       [_x, _y]: [Box<number>, Box<string>],
       _a: Box<boolean>,
       _b: Box<bigint>,
+    ) {},
+  );
+  // procI
+  const soi = procI(
+    function soiOutOfPlace(
+      _x: Box<number>,
+      _a: Box<number>,
+      _b: Box<string>,
+      _c: Box<boolean>,
+    ) {},
+    function soiInPlace(_x: Box<number>, _b: Box<string>, _c: Box<boolean>) {},
+  );
+  procI(
+    function soiOutOfPlace(_x: Box<number>, _a: Box<number>) {},
+    // @ts-expect-error: inout type conflicts with output/input0 type
+    function soiInPlace(_x: Box<string>) {},
+  );
+  procI(
+    function soiOutOfPlace(
+      _x: Box<number>,
+      _a: Box<number>,
+      _b: Box<string>,
+      _c: Box<boolean>,
+    ) {},
+    // @ts-expect-error: rest input types conflict with fOutOfPlace
+    function soiInPlace(
+      _x: Box<number>,
+      _b: Box<boolean>,
+      _c: Box<string>,
     ) {},
   );
   const sop = toFunc(
@@ -453,6 +681,14 @@ Deno.test(function types() {
       [testValue<Handle<Box<number>>>(), testValue<Handle<Box<string>>>()],
       testValue<Handle<Box<boolean>>>(),
       testValue<Handle<Box<bigint>>>(),
+    );
+
+    // soi: OK
+    soi(
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
     );
 
     // sop: OK
@@ -624,6 +860,65 @@ Deno.test(function types() {
       // @ts-expect-error: excessive input args
       // deno-lint-ignore no-explicit-any
       testValue<Handle<Box<any>>>(),
+    );
+
+    // soi: NG
+    soi(
+      // @ts-expect-error: output type is wrong
+      testValue<Handle<Box<symbol>>>(),
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
+    );
+    soi(
+      testValue<Handle<Box<number>>>(),
+      // @ts-expect-error: input0 type is wrong
+      testValue<Handle<Box<symbol>>>(),
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
+    );
+    soi(
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<number>>>(),
+      // @ts-expect-error: 1st rest input type is wrong
+      testValue<Handle<Box<symbol>>>(),
+      testValue<Handle<Box<boolean>>>(),
+    );
+    soi(
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+      // @ts-expect-error: 2nd rest input type is wrong
+      testValue<Handle<Box<symbol>>>(),
+    );
+    // @ts-expect-error: insufficient args
+    soi(
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+    );
+    soi(
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
+      // @ts-expect-error: excessive args
+      // deno-lint-ignore no-explicit-any
+      testValue<Handle<Box<any>>>(),
+    );
+    soi(
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<number>>>(),
+      // @ts-expect-error: rest args swapped
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<string>>>(),
+    );
+    soi(
+      // @ts-expect-error: output and input0 type mismatch
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<number>>>(),
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
     );
   });
 });

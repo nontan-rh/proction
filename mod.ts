@@ -231,11 +231,114 @@ export function proc<O, I extends readonly unknown[]>(
       id,
       inputs,
       outputs: [output],
-      run: applyMiddlewares(body, middlewares),
+      resolveBody: () => applyMiddlewares(body, middlewares),
       // calculated on run preparation
       next: [],
       numBlockers: 0,
       numResolvedBlockers: 0,
+      body: null,
+    };
+    plan[internalPlanKey].invocations.set(invocation.id, invocation);
+  };
+
+  return g;
+}
+
+/**
+ * Creates an indirect procedure which has a single output combining an in-place
+ * implementation and an out-of-place implementation.
+ * @typeparam IO The first input type and output type of the indirect procedure.
+ * @typeparam I The list of rest input types of the indirect procedure.
+ * @param fOutOfPlace The body function of the indirect out-of-place procedure.
+ * @param fInPlace The body function of the indirect in-place procedure.
+ * @param procOptions The options of the proc.
+ * @returns An indirect procedure.
+ */
+export function procI<IO, I extends readonly unknown[]>(
+  fOutOfPlace: (
+    output: IO,
+    input0: IO,
+    ...restInputs: I
+  ) => void | Promise<void>,
+  fInPlace: (inout: IO, ...restInputs: I) => void | Promise<void>,
+  procOptions?: ProcOptions,
+): (
+  output: Handle<IO>,
+  input0: Handle<IO>,
+  ...restInputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
+) => void {
+  const middlewares = procOptions?.middlewares ?? [];
+
+  const g = (
+    output: Handle<IO>,
+    input0: Handle<IO>,
+    ...restInputs: MappedHandleType<I>
+  ) => {
+    const plan = getPlan(output, input0, ...restInputs);
+
+    const id = plan[internalPlanKey].generateInvocationID();
+    const bodyOutOfPlace = async () => {
+      const restoredInput0 = restore(plan, input0);
+      const restoredRestInputs = restoreInputs(plan, restInputs);
+      const preparedOutput = prepareOutput(plan, output);
+      await fOutOfPlace(preparedOutput, restoredInput0, ...restoredRestInputs);
+      decRef(plan, input0);
+      decRefArray(plan, restInputs);
+      decRef(plan, output);
+    };
+
+    const bodyInPlace = async () => {
+      const restoredInOut0 = transferInOut(plan, input0, output);
+      const restoredRestInputs = restoreInputs(plan, restInputs);
+      await fInPlace(restoredInOut0, ...restoredRestInputs);
+      // the content of input0 is already transferred to the output
+      // decRef(plan, input0);
+      decRefArray(plan, restInputs);
+      decRef(plan, output);
+    };
+
+    const resolveBody = (ctx: ResolveContext): () => Promise<void> => {
+      const input0Count = ctx.inputConsumerCounts.get(input0[handleIdKey]);
+      if (input0Count == null) {
+        throw new LogicError(
+          `the input consumer count for input handle is not calculated: ${input0}`,
+        );
+      }
+
+      if (input0Count === 1) {
+        const input0Slot = ctx.plan[internalPlanKey].dataSlots.get(
+          input0[handleIdKey],
+        );
+        if (input0Slot == null) {
+          throw new LogicError(`dataSlot not found for handle: ${input0}`);
+        }
+        const outputSlot = ctx.plan[internalPlanKey].dataSlots.get(
+          output[handleIdKey],
+        );
+        if (outputSlot == null) {
+          throw new LogicError(`dataSlot not found for handle: ${output}`);
+        }
+
+        if (
+          input0Slot.type === "intermediate" &&
+          outputSlot.type === "intermediate"
+        ) {
+          return applyMiddlewares(bodyInPlace, middlewares);
+        }
+      }
+      return applyMiddlewares(bodyOutOfPlace, middlewares);
+    };
+
+    const invocation: Invocation = {
+      id,
+      inputs: [input0, ...restInputs],
+      outputs: [output],
+      resolveBody,
+      // calculated on run preparation
+      next: [],
+      numBlockers: 0,
+      numResolvedBlockers: 0,
+      body: null,
     };
     plan[internalPlanKey].invocations.set(invocation.id, invocation);
   };
@@ -281,11 +384,12 @@ export function procN<
       id,
       inputs,
       outputs,
-      run: applyMiddlewares(body, middlewares),
+      resolveBody: () => applyMiddlewares(body, middlewares),
       // calculated on run preparation
       next: [],
       numBlockers: 0,
       numResolvedBlockers: 0,
+      body: null,
     };
     plan[internalPlanKey].invocations.set(invocation.id, invocation);
   };
@@ -382,6 +486,13 @@ export function toFuncN<
  */
 type InvocationID = Brand<number, "invocationID">;
 /**
+ * An internal type used for body resolution.
+ */
+interface ResolveContext {
+  readonly plan: Plan;
+  readonly inputConsumerCounts: Map<HandleId, number>;
+}
+/**
  * An internal type to represent an invocation. Invocation represents a running procedure or function.
  * It is the unit of execution of a Proction program.
  */
@@ -389,10 +500,11 @@ interface Invocation {
   readonly id: InvocationID;
   readonly inputs: readonly UntypedHandle[];
   readonly outputs: readonly UntypedHandle[];
-  readonly run: () => Promise<void>;
+  readonly resolveBody: (context: ResolveContext) => () => Promise<void>;
   readonly next: Invocation[];
   numBlockers: number;
   numResolvedBlockers: number;
+  body: (() => Promise<void>) | null;
 }
 
 /**
@@ -718,7 +830,7 @@ async function runPlan(
 
       const scheduler = plan.context[contextOptionsKey].scheduler;
       runningInvocations.add(invocation.id);
-      scheduler.spawn(invocation.run).then(() => {
+      scheduler.spawn(invocation.body!).then(() => {
         for (const next of invocation.next) {
           if (next.numResolvedBlockers >= next.numBlockers) {
             throw new LogicError("the invocation is resolved twice");
@@ -783,6 +895,18 @@ function prepareInvocations(
     }
   }
 
+  const inputConsumerCounts = new Map<HandleId, number>();
+  const resolveContext: ResolveContext = { plan, inputConsumerCounts };
+  for (const invocation of plan[internalPlanKey].invocations.values()) {
+    for (const input of invocation.inputs) {
+      const id = input[handleIdKey];
+      inputConsumerCounts.set(id, (inputConsumerCounts.get(id) ?? 0) + 1);
+    }
+  }
+  for (const invocation of plan[internalPlanKey].invocations.values()) {
+    invocation.body = invocation.resolveBody(resolveContext);
+  }
+
   for (const invocation of plan[internalPlanKey].invocations.values()) {
     if (invocation.numBlockers === 0) {
       freeInvocations.push(invocation);
@@ -807,7 +931,7 @@ function prepareDataSlots(
       );
       if (dataSlot == null) {
         throw new LogicError(
-          `dataSlot not found for handle: ${source}`,
+          `dataSlot not found for handle: ${input}`,
         );
       }
 
@@ -875,6 +999,44 @@ function restore<T>(plan: Plan, handle: Handle<T>): T {
     default:
       return unreachable(type);
   }
+}
+
+/**
+ * An internal function to restore an actual argument from a handle and transfer the content.
+ * @typeparam T The type of the argument.
+ * @param plan The plan the handle belongs to.
+ * @param inHandle The handle of an input.
+ * @param outHandle The handle of an output.
+ * @returns The restored input and prepared output.
+ */
+function transferInOut<T>(
+  plan: Plan,
+  inHandle: Handle<T>,
+  outHandle: Handle<T>,
+): T {
+  const inDataSlot = plan[internalPlanKey].dataSlots.get(inHandle[handleIdKey]);
+  if (inDataSlot == null) {
+    throw new LogicError(`datum not saved for handle: ${inHandle}`);
+  }
+  const inType = inDataSlot.type;
+  if (inType !== "intermediate") {
+    throw new LogicError(`unexpected data slot type: ${inType}`);
+  }
+  const outDataSlot = plan[internalPlanKey].dataSlots.get(
+    outHandle[handleIdKey],
+  );
+  if (outDataSlot == null) {
+    throw new LogicError(`datum not saved for handle: ${outHandle}`);
+  }
+  const outType = outDataSlot.type;
+  if (outType !== "intermediate") {
+    throw new LogicError(`unexpected data slot type: ${outType}`);
+  }
+
+  const disposableWrap = inDataSlot.disposableWrapContainer.extract();
+  outDataSlot.disposableWrapContainer.initialize(disposableWrap);
+
+  return disposableWrap.body as T;
 }
 
 /**
