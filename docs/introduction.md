@@ -288,6 +288,35 @@ const indirectAddFunctionWithPool = toFunc(indirectAddProcedure, (lht, _rht) => 
 
 You can completely reuse `indirectAddProcedure` and customize the resource management. The objects are returned to the provider as soon as they are no longer required. Concretely, Proction tracks the data-dependency graph and releases provider-managed buffers after all downstream consumers complete. Thanks to object pools, the number of array allocations is minimized and buffers are reused when possible, reducing GC pressure in steady state.
 
+## In-Place Optimization
+
+We can reduce resource usage further by reusing an input buffer as the output buffer. As an example, for an operation like `c = a + b`, we may be able to modify it to `a = a + b` and reduce the buffers required at the same time. This pattern often appears as per-pixel blending into a framebuffer in graphics APIs.
+
+However, mutating routines are often harder to compose. Callers may need to keep track of which values are safe to overwrite, insert explicit copies when necessary, or choose between out-of-place and in-place variants.
+
+Proction supports this pattern with `procI` (and its multi-output variants `procNI1` / `procNIAll`). `procI` lets you provide two implementations: a standard out-of-place implementation and an in-place implementation.
+
+```ts
+const double = procI(
+  // Out-of-place implementation: writes to `output`, reads `input0`
+  function doubleOutOfPlace(output: number[], input0: number[]) {
+    for (let i = 0; i < output.length; i++) {
+      output[i] = input0[i] * 2;
+    }
+  },
+  // In-place implementation: modifies `inout` directly
+  function doubleInPlace(inout: number[]) {
+    for (let i = 0; i < inout.length; i++) {
+      inout[i] *= 2;
+    }
+  }
+);
+
+const pureDouble = toFunc(double, (input) => provide(input.length));
+```
+
+When you use `pureDouble` in a `run` block, Proction automatically decides which implementation to use. It selects the in-place version when it is safe: when the first input is managed by Proction and has exactly one consumer. Otherwise, it falls back to the out-of-place version.
+
 ## Parallelism
 
 `proc` can take `async` JavaScript functions as their implementation to enable parallel computing. You can use Web Workers, for example, to take advantage of multi-core CPUs. Here is a very simplified example.
