@@ -1144,6 +1144,162 @@ Deno.test(async function procNIAllInPlace(t) {
   });
 });
 
+Deno.test(async function errorPaths(t) {
+  await t.step("proc: output provide throws", async () => {
+    const arrayPool = createNumberArrayTestPool();
+
+    const copy = proc(function copyBody(result: number[], input: number[]) {
+      for (let i = 0; i < result.length; i++) {
+        result[i] = input[i];
+      }
+    });
+
+    await run(new Context(contextOptions), ({ $s, $i }) => {
+      const output = $i<number[]>(() => {
+        throw new Error("test");
+      });
+      copy(output, $s([1, 2]));
+    });
+
+    arrayPool.assertNoError();
+  });
+
+  await t.step("procN: second output provide throws", async () => {
+    const boxPool = createBoxedNumberTestPool();
+
+    const two = procN(function twoBody(
+      _outputs: [Box<number>, Box<number>],
+      _input: Box<number>,
+    ) {});
+
+    let provide0Called = false;
+    let provide1Called = false;
+
+    await run(new Context(contextOptions), ({ $s, $i }) => {
+      const output0 = $i(() => {
+        provide0Called = true;
+        return boxPool.provide();
+      });
+      const output1 = $i<Box<number>>(() => {
+        provide1Called = true;
+        throw new Error("test");
+      });
+      two([output0, output1], $s(Box.withValue(1)));
+    });
+
+    assertEquals(provide0Called, true);
+    assertEquals(provide1Called, true);
+    boxPool.assertNoError();
+  });
+
+  await t.step("procI: in-place body throws", async () => {
+    const arrayPool = createNumberArrayTestPool();
+
+    const copy = proc(function copyBody(result: number[], input: number[]) {
+      for (let i = 0; i < result.length; i++) {
+        result[i] = input[i];
+      }
+    });
+    const pureCopy = toFunc(copy, (input) => arrayPool.provide(input.length));
+
+    const explode = procI(
+      function outOfPlace(_output: number[], _input0: number[]) {
+        // not used in this test
+      },
+      function inPlace(_inout: number[]) {
+        throw new Error("test");
+      },
+    );
+
+    await run(new Context(contextOptions), ({ $s, $i }) => {
+      const input0 = pureCopy($s([1, 2]));
+      const output = $i(() => arrayPool.provide(2));
+      explode(output, input0);
+    });
+
+    arrayPool.assertNoError();
+  });
+
+  await t.step(
+    "procNI1: in-place does not leak when rest output provide throws",
+    async () => {
+      const arrayPool = createNumberArrayTestPool();
+
+      const copy = proc(function copyBody(result: number[], input: number[]) {
+        for (let i = 0; i < result.length; i++) {
+          result[i] = input[i];
+        }
+      });
+      const pureCopy = toFunc(copy, (input) => arrayPool.provide(input.length));
+
+      const passThroughAndFlag = procNI1(
+        function outOfPlace(
+          [_output0, _flag]: [number[], Box<number>],
+          _input0: number[],
+        ) {
+          // not used in this test
+        },
+        function inPlace(
+          _inout0: number[],
+          [_flag]: [Box<number>],
+        ) {
+          // not used in this test
+        },
+      );
+
+      let provideCalled = false;
+
+      await run(new Context(contextOptions), ({ $s, $i }) => {
+        const input0 = pureCopy($s([1, 2]));
+        const output0 = $i(() => arrayPool.provide(2));
+        const flag = $i<Box<number>>(() => {
+          provideCalled = true;
+          throw new Error("boom");
+        });
+
+        passThroughAndFlag([output0, flag], input0);
+      });
+
+      assertEquals(provideCalled, true);
+      arrayPool.assertNoError();
+    },
+  );
+
+  await t.step("procNIAll: in-place body throws", async () => {
+    const arrayPool = createNumberArrayTestPool();
+
+    const copy = proc(function copyBody(result: number[], input: number[]) {
+      for (let i = 0; i < result.length; i++) {
+        result[i] = input[i];
+      }
+    });
+    const pureCopy = toFunc(copy, (input) => arrayPool.provide(input.length));
+
+    const explode = procNIAll(
+      function outOfPlace(
+        _outputs: [number[], number[]],
+        _a: number[],
+        _b: number[],
+      ) {
+        // not used in this test
+      },
+      function inPlace(_inout: [number[], number[]]) {
+        throw new Error("test");
+      },
+    );
+
+    await run(new Context(contextOptions), ({ $s, $i }) => {
+      const a = pureCopy($s([1, 2]));
+      const b = pureCopy($s([3, 4]));
+      const outA = $i(() => arrayPool.provide(2));
+      const outB = $i(() => arrayPool.provide(2));
+      explode([outA, outB], a, b);
+    });
+
+    arrayPool.assertNoError();
+  });
+});
+
 Deno.test(function types() {
   const so = proc(
     function soBody(_x: Box<number>, _a: Box<string>, _b: Box<boolean>) {},

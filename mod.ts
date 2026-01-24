@@ -239,11 +239,14 @@ export function proc<O, I extends readonly unknown[]>(
 
     const id = plan[internalPlanKey].generateInvocationID();
     const body = async () => {
-      const restoredInputs = restoreInputs(plan, inputs);
-      const preparedOutputs = prepareOutput(plan, output);
-      await f(preparedOutputs, ...restoredInputs);
-      decRefArray(plan, inputs);
-      decRef(plan, output);
+      try {
+        const restoredInputs = restoreInputs(plan, inputs);
+        const preparedOutputs = prepareOutput(plan, output);
+        await f(preparedOutputs, ...restoredInputs);
+      } finally {
+        decRefArray(plan, inputs);
+        decRef(plan, output);
+      }
     };
     const invocation: Invocation = {
       id,
@@ -296,23 +299,37 @@ export function procI<IO, I extends readonly unknown[]>(
 
     const id = plan[internalPlanKey].generateInvocationID();
     const bodyOutOfPlace = async () => {
-      const restoredInput0 = restore(plan, input0);
-      const restoredRestInputs = restoreInputs(plan, restInputs);
-      const preparedOutput = prepareOutput(plan, output);
-      await fOutOfPlace(preparedOutput, restoredInput0, ...restoredRestInputs);
-      decRef(plan, input0);
-      decRefArray(plan, restInputs);
-      decRef(plan, output);
+      try {
+        const restoredInput0 = restore(plan, input0);
+        const restoredRestInputs = restoreInputs(plan, restInputs);
+        const preparedOutput = prepareOutput(plan, output);
+        await fOutOfPlace(
+          preparedOutput,
+          restoredInput0,
+          ...restoredRestInputs,
+        );
+      } finally {
+        decRef(plan, input0);
+        decRefArray(plan, restInputs);
+        decRef(plan, output);
+      }
     };
 
     const bodyInPlace = async () => {
-      const restoredRestInputs = restoreInputs(plan, restInputs);
-      const restoredInOut0 = transferInOut(plan, input0, output);
-      await fInPlace(restoredInOut0, ...restoredRestInputs);
-      // the content of input0 is already transferred to the output
-      // decRef(plan, input0);
-      decRefArray(plan, restInputs);
-      decRef(plan, output);
+      let transferring = false;
+      try {
+        const restoredRestInputs = restoreInputs(plan, restInputs);
+        transferring = true;
+        const restoredInOut0 = transferInOut(plan, input0, output);
+        await fInPlace(restoredInOut0, ...restoredRestInputs);
+      } finally {
+        // If transfer did not happen, we still need to release input0.
+        if (!transferring) {
+          decRef(plan, input0);
+        }
+        decRefArray(plan, restInputs);
+        decRef(plan, output);
+      }
     };
 
     const resolveBody = (ctx: ResolveContext): () => Promise<void> => {
@@ -392,11 +409,14 @@ export function procN<
 
     const id = plan[internalPlanKey].generateInvocationID();
     const body = async () => {
-      const restoredInputs = restoreInputs(plan, inputs);
-      const preparedOutputs = prepareMultipleOutput(plan, outputs);
-      await f(preparedOutputs, ...restoredInputs);
-      decRefArray(plan, inputs);
-      decRefArray(plan, outputs);
+      try {
+        const restoredInputs = restoreInputs(plan, inputs);
+        const preparedOutputs = prepareMultipleOutput(plan, outputs);
+        await f(preparedOutputs, ...restoredInputs);
+      } finally {
+        decRefArray(plan, inputs);
+        decRefArray(plan, outputs);
+      }
     };
     const invocation: Invocation = {
       id,
@@ -462,34 +482,48 @@ export function procNI1<
 
     const id = plan[internalPlanKey].generateInvocationID();
     const bodyOutOfPlace = async () => {
-      const restoredInput0 = restore(plan, input0);
-      const restoredRestInputs = restoreInputs(plan, restInputs);
-      const preparedOutputs = prepareMultipleOutput(plan, outputs) as [
-        IO,
-        ...O,
-      ];
-      await fOutOfPlace(preparedOutputs, restoredInput0, ...restoredRestInputs);
-      decRef(plan, input0);
-      decRefArray(plan, restInputs);
-      decRefArray(plan, outputs);
+      try {
+        const restoredInput0 = restore(plan, input0);
+        const restoredRestInputs = restoreInputs(plan, restInputs);
+        const preparedOutputs = prepareMultipleOutput(plan, outputs) as [
+          IO,
+          ...O,
+        ];
+        await fOutOfPlace(
+          preparedOutputs,
+          restoredInput0,
+          ...restoredRestInputs,
+        );
+      } finally {
+        decRef(plan, input0);
+        decRefArray(plan, restInputs);
+        decRefArray(plan, outputs);
+      }
     };
 
     const bodyInPlace = async () => {
-      const preparedRestOutputs = prepareMultipleOutput(
-        plan,
-        restOutputs,
-      ) as O;
-      const restoredRestInputs = restoreInputs(plan, restInputs);
-      const restoredInOut0 = transferInOut(plan, input0, output0);
-      await fInPlace(
-        restoredInOut0,
-        preparedRestOutputs,
-        ...restoredRestInputs,
-      );
-      // the content of input0 is already transferred to the output
-      // decRef(plan, input0);
-      decRefArray(plan, restInputs);
-      decRefArray(plan, outputs);
+      let transferring = false;
+      try {
+        const preparedRestOutputs = prepareMultipleOutput(
+          plan,
+          restOutputs,
+        ) as O;
+        const restoredRestInputs = restoreInputs(plan, restInputs);
+        transferring = true;
+        const restoredInOut0 = transferInOut(plan, input0, output0);
+        await fInPlace(
+          restoredInOut0,
+          preparedRestOutputs,
+          ...restoredRestInputs,
+        );
+      } finally {
+        // If transfer did not happen, we still need to release input0.
+        if (!transferring) {
+          decRef(plan, input0);
+        }
+        decRefArray(plan, restInputs);
+        decRefArray(plan, outputs);
+      }
     };
 
     const resolveBody = (ctx: ResolveContext): () => Promise<void> => {
@@ -588,31 +622,43 @@ export function procNIAll<
     const id = plan[internalPlanKey].generateInvocationID();
 
     const bodyOutOfPlace = async () => {
-      const restoredIoInputs = restoreInputs(plan, ioInputs);
-      const restoredAdditionalInputs = restoreInputs(plan, additionalInputs);
-      const preparedOutputs = prepareMultipleOutput(plan, outputs) as IO;
-      await fOutOfPlace(
-        preparedOutputs,
-        ...(restoredIoInputs as [...IO]),
-        ...(restoredAdditionalInputs as [...I]),
-      );
-      decRefArray(plan, ioInputs);
-      decRefArray(plan, additionalInputs);
-      decRefArray(plan, outputs);
+      try {
+        const restoredIoInputs = restoreInputs(plan, ioInputs);
+        const restoredAdditionalInputs = restoreInputs(plan, additionalInputs);
+        const preparedOutputs = prepareMultipleOutput(plan, outputs) as IO;
+        await fOutOfPlace(
+          preparedOutputs,
+          ...(restoredIoInputs as [...IO]),
+          ...(restoredAdditionalInputs as [...I]),
+        );
+      } finally {
+        decRefArray(plan, ioInputs);
+        decRefArray(plan, additionalInputs);
+        decRefArray(plan, outputs);
+      }
     };
 
     const bodyInPlace = async () => {
-      const restoredAdditionalInputs = restoreInputs(plan, additionalInputs);
-      const restoredInOuts = [];
-      for (let i = 0; i < ioLength; i++) {
-        restoredInOuts.push(transferInOut(plan, ioInputs[i], outputs[i]));
+      let transferringCount = 0;
+      try {
+        const restoredAdditionalInputs = restoreInputs(plan, additionalInputs);
+        const restoredInOuts = [];
+        for (let i = 0; i < ioLength; i++) {
+          transferringCount++;
+          restoredInOuts.push(transferInOut(plan, ioInputs[i], outputs[i]));
+        }
+        await fInPlace(
+          restoredInOuts as unknown as IO,
+          ...(restoredAdditionalInputs as [...I]),
+        );
+      } finally {
+        // If some transfers did not happen, we still need to release those inputs.
+        for (let i = transferringCount; i < ioLength; i++) {
+          decRef(plan, ioInputs[i]);
+        }
+        decRefArray(plan, additionalInputs);
+        decRefArray(plan, outputs);
       }
-      await fInPlace(
-        restoredInOuts as unknown as IO,
-        ...(restoredAdditionalInputs as [...I]),
-      );
-      decRefArray(plan, additionalInputs);
-      decRefArray(plan, outputs);
     };
 
     const resolveBody = (ctx: ResolveContext): () => Promise<void> => {
@@ -1315,7 +1361,28 @@ function transferInOut<T>(
   }
 
   const disposableWrap = inDataSlot.disposableWrapContainer.extract();
-  outDataSlot.disposableWrapContainer.initialize(disposableWrap);
+  // NOTE: `transferInOut()` is not expected to fail in normal operation:
+  // any failure here indicates an internal invariant violation (LogicError),
+  // and we intentionally bail out rather than attempting recovery.
+  //
+  // However, after `extract()` succeeds, ownership of the DisposableWrap is no longer
+  // recorded in any data slot. If `initialize()` throws (e.g. the output container is already
+  // initialized/freed), the final plan sweep cannot dispose this object. So we dispose it here
+  // to avoid leaking resources, then rethrow.
+  try {
+    outDataSlot.disposableWrapContainer.initialize(disposableWrap);
+  } catch (e: unknown) {
+    try {
+      disposableWrap[Symbol.dispose]();
+    } catch (disposeError: unknown) {
+      try {
+        plan.context[contextOptionsKey].reportError(disposeError);
+      } catch {
+        // cannot recover
+      }
+    }
+    throw e;
+  }
 
   return disposableWrap.body as T;
 }

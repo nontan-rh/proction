@@ -32,7 +32,7 @@ export class DelayedRc<T> {
    * @param managedObject The object to hold.
    */
   initialize(managedObject: T) {
-    this.#assertNotInitialized();
+    this.#assertInitializable();
 
     this.#initialized = true;
     this.#managedObject = managedObject;
@@ -59,15 +59,15 @@ export class DelayedRc<T> {
 
   /**
    * Decrements the reference count.
-   * If the reference count reaches 0, the held object is destroyed.
+   * If the reference count reaches 0 and it holds a value, the held object is destroyed.
    * If some exception is thrown during the destruction, it is reported to the reportError function
    * and the exception is not rethrown.
    */
   decRef(): void {
-    this.#assertIsValid();
+    this.#assertNotFreed();
 
     this.#count--;
-    if (this.#count <= 0) {
+    if (this.#initialized && this.#count <= 0) {
       this.#destroyManagedObject();
     }
   }
@@ -130,9 +130,12 @@ export class DelayedRc<T> {
     }
   }
 
-  #assertNotInitialized(): void {
+  #assertInitializable(): void {
     if (this.#initialized) {
       throw new LogicError("this reference counter is already initialized");
+    }
+    if (this.#count <= 0) {
+      throw new LogicError("this reference counter is already freed");
     }
   }
 
