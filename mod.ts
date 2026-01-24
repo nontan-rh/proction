@@ -485,10 +485,7 @@ export function procNI1<
       try {
         const restoredInput0 = restore(plan, input0);
         const restoredRestInputs = restoreInputs(plan, restInputs);
-        const preparedOutputs = prepareMultipleOutput(plan, outputs) as [
-          IO,
-          ...O,
-        ];
+        const preparedOutputs = prepareMultipleOutput(plan, outputs);
         await fOutOfPlace(
           preparedOutputs,
           restoredInput0,
@@ -507,7 +504,7 @@ export function procNI1<
         const preparedRestOutputs = prepareMultipleOutput(
           plan,
           restOutputs,
-        ) as O;
+        );
         const restoredRestInputs = restoreInputs(plan, restInputs);
         transferring = true;
         const restoredInOut0 = transferInOut(plan, input0, output0);
@@ -625,11 +622,11 @@ export function procNIAll<
       try {
         const restoredIoInputs = restoreInputs(plan, ioInputs);
         const restoredAdditionalInputs = restoreInputs(plan, additionalInputs);
-        const preparedOutputs = prepareMultipleOutput(plan, outputs) as IO;
+        const preparedOutputs = prepareMultipleOutput(plan, outputs);
         await fOutOfPlace(
           preparedOutputs,
-          ...(restoredIoInputs as [...IO]),
-          ...(restoredAdditionalInputs as [...I]),
+          ...restoredIoInputs,
+          ...restoredAdditionalInputs,
         );
       } finally {
         decRefArray(plan, ioInputs);
@@ -649,7 +646,7 @@ export function procNIAll<
         }
         await fInPlace(
           restoredInOuts as unknown as IO,
-          ...(restoredAdditionalInputs as [...I]),
+          ...restoredAdditionalInputs,
         );
       } finally {
         // If some transfers did not happen, we still need to release those inputs.
@@ -712,7 +709,7 @@ export function procNIAll<
     const invocation: Invocation = {
       id,
       inputs: [...ioInputs, ...additionalInputs],
-      outputs: outputs as unknown as UntypedHandle[],
+      outputs: outputs,
       resolveBody,
       next: [],
       numBlockers: 0,
