@@ -67,19 +67,8 @@ export class DelayedRc<T> {
     this.#assertIsValid();
 
     this.#count--;
-
     if (this.#count <= 0) {
-      try {
-        this.#destroy(this.#managedObject!);
-      } catch (e: unknown) {
-        try {
-          this.#reportError(e);
-        } catch {
-          // cannot recover
-        }
-      } finally {
-        this.#managedObject = undefined;
-      }
+      this.#destroyManagedObject();
     }
   }
 
@@ -111,6 +100,34 @@ export class DelayedRc<T> {
     this.#managedObject = undefined;
     this.#count = 0;
     return obj;
+  }
+
+  /**
+   * Clean up the managed object forcibly.
+   * It frees the content and marks the container no longer usable regardless of the current state
+   * i.e. it sets the initialized flag and count to 0.
+   */
+  forceCleanUp(): void {
+    if (this.#count >= 1 && this.#initialized) {
+      this.#destroyManagedObject();
+    }
+
+    this.#initialized = true;
+    this.#count = 0;
+  }
+
+  #destroyManagedObject(): void {
+    try {
+      this.#destroy(this.#managedObject!);
+    } catch (e: unknown) {
+      try {
+        this.#reportError(e);
+      } catch {
+        // cannot recover
+      }
+    } finally {
+      this.#managedObject = undefined;
+    }
   }
 
   #assertNotInitialized(): void {

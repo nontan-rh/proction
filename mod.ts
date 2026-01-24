@@ -1131,9 +1131,7 @@ async function runPlan(
       });
     }
 
-    if (plan.context[contextOptionsKey].assertNoLeak) {
-      assertNoLeak(plan);
-    }
+    ensureAllIntermediateSlotsFreed(plan);
 
     plan[internalPlanKey].state = "done";
   } finally {
@@ -1421,7 +1419,8 @@ function prepareMultipleOutput<
  * An internal function to assert no leak.
  * @param plan The plan to check.
  */
-function assertNoLeak(plan: Plan) {
+function ensureAllIntermediateSlotsFreed(plan: Plan) {
+  let hasLeak = false;
   for (const dataSlot of plan[internalPlanKey].dataSlots.values()) {
     const type = dataSlot.type;
     switch (type) {
@@ -1429,16 +1428,20 @@ function assertNoLeak(plan: Plan) {
         break;
       case "intermediate":
         if (!dataSlot.disposableWrapContainer.isFreed) {
-          throw new AssertionError(
-            "intermediate data slot is not freed",
-          );
+          hasLeak = true;
         }
+        dataSlot.disposableWrapContainer.forceCleanUp();
         break;
       case "destination":
         break;
       default:
         return unreachable(type);
     }
+  }
+  if (plan.context[contextOptionsKey].assertNoLeak && hasLeak) {
+    throw new AssertionError(
+      "intermediate data slot is not freed",
+    );
   }
 }
 
