@@ -1128,6 +1128,8 @@ async function runPlan(
     );
   }
 
+  const invocationErrors: unknown[] = [];
+  let cleanupError: unknown | undefined;
   try {
     plan[internalPlanKey].state = "planning";
 
@@ -1155,32 +1157,49 @@ async function runPlan(
 
       const scheduler = plan.context[contextOptionsKey].scheduler;
       runningInvocations.add(invocation.id);
-      scheduler.spawn(invocation.body!).then(() => {
-        for (const next of invocation.next) {
-          if (next.numResolvedBlockers >= next.numBlockers) {
-            throw new LogicError("the invocation is resolved twice");
+      scheduler.spawn(invocation.body!)
+        .then(() => {
+          for (const next of invocation.next) {
+            if (next.numResolvedBlockers >= next.numBlockers) {
+              throw new LogicError("the invocation is resolved twice");
+            }
+            next.numResolvedBlockers++;
+            if (next.numResolvedBlockers >= next.numBlockers) {
+              freeInvocations.push(next);
+            }
           }
-          next.numResolvedBlockers++;
-          if (next.numResolvedBlockers >= next.numBlockers) {
-            freeInvocations.push(next);
-          }
-        }
-        runningInvocations.delete(invocation.id);
-        notify();
-      }, (_: unknown) => {
-        // TODO: Internal errors come here. Notify the error to the user.
-        runningInvocations.delete(invocation.id);
-        notify();
-      });
+        })
+        .catch((err: unknown) => {
+          invocationErrors.push(err);
+        })
+        .finally(() => {
+          runningInvocations.delete(invocation.id);
+          notify();
+        });
     }
 
-    ensureAllIntermediateSlotsFreed(plan);
+    if (invocationErrors.length === 1) {
+      throw invocationErrors[0];
+    }
+    if (invocationErrors.length > 1) {
+      throw new AggregateError(invocationErrors, "invocation failed");
+    }
 
     plan[internalPlanKey].state = "done";
   } finally {
+    try {
+      ensureAllIntermediateSlotsFreed(plan);
+    } catch (error) {
+      cleanupError = error;
+    }
+
     if (plan[internalPlanKey].state !== "done") {
       plan[internalPlanKey].state = "error";
     }
+  }
+
+  if (cleanupError !== undefined && invocationErrors.length === 0) {
+    throw cleanupError;
   }
 }
 

@@ -2,6 +2,7 @@ import {
   assertEquals,
   assertFalse,
   assertGreaterOrEqual,
+  assertRejects,
   assertThrows,
 } from "@std/assert";
 import { delay } from "@std/async";
@@ -1154,12 +1155,17 @@ Deno.test(async function errorPaths(t) {
       }
     });
 
-    await run(new Context(contextOptions), ({ $s, $i }) => {
-      const output = $i<number[]>(() => {
-        throw new Error("test");
-      });
-      copy(output, $s([1, 2]));
-    });
+    await assertRejects(
+      () =>
+        run(new Context(contextOptions), ({ $s, $i }) => {
+          const output = $i<number[]>(() => {
+            throw new Error("test");
+          });
+          copy(output, $s([1, 2]));
+        }),
+      Error,
+      "test",
+    );
 
     arrayPool.assertNoError();
   });
@@ -1175,17 +1181,22 @@ Deno.test(async function errorPaths(t) {
     let provide0Called = false;
     let provide1Called = false;
 
-    await run(new Context(contextOptions), ({ $s, $i }) => {
-      const output0 = $i(() => {
-        provide0Called = true;
-        return boxPool.provide();
-      });
-      const output1 = $i<Box<number>>(() => {
-        provide1Called = true;
-        throw new Error("test");
-      });
-      two([output0, output1], $s(Box.withValue(1)));
-    });
+    await assertRejects(
+      () =>
+        run(new Context(contextOptions), ({ $s, $i }) => {
+          const output0 = $i(() => {
+            provide0Called = true;
+            return boxPool.provide();
+          });
+          const output1 = $i<Box<number>>(() => {
+            provide1Called = true;
+            throw new Error("test");
+          });
+          two([output0, output1], $s(Box.withValue(1)));
+        }),
+      Error,
+      "test",
+    );
 
     assertEquals(provide0Called, true);
     assertEquals(provide1Called, true);
@@ -1211,11 +1222,16 @@ Deno.test(async function errorPaths(t) {
       },
     );
 
-    await run(new Context(contextOptions), ({ $s, $i }) => {
-      const input0 = pureCopy($s([1, 2]));
-      const output = $i(() => arrayPool.provide(2));
-      explode(output, input0);
-    });
+    await assertRejects(
+      () =>
+        run(new Context(contextOptions), ({ $s, $i }) => {
+          const input0 = pureCopy($s([1, 2]));
+          const output = $i(() => arrayPool.provide(2));
+          explode(output, input0);
+        }),
+      Error,
+      "test",
+    );
 
     arrayPool.assertNoError();
   });
@@ -1249,16 +1265,22 @@ Deno.test(async function errorPaths(t) {
 
       let provideCalled = false;
 
-      await run(new Context(contextOptions), ({ $s, $i }) => {
-        const input0 = pureCopy($s([1, 2]));
-        const output0 = $i(() => arrayPool.provide(2));
-        const flag = $i<Box<number>>(() => {
-          provideCalled = true;
-          throw new Error("boom");
-        });
+      await assertRejects(
+        () =>
+          run(new Context(contextOptions), ({ $s, $i }) => {
+            const input0 = pureCopy($s([1, 2]));
 
-        passThroughAndFlag([output0, flag], input0);
-      });
+            const output0 = $i(() => arrayPool.provide(2));
+            const flag = $i<Box<number>>(() => {
+              provideCalled = true;
+              throw new Error("test");
+            });
+
+            passThroughAndFlag([output0, flag], input0);
+          }),
+        Error,
+        "test",
+      );
 
       assertEquals(provideCalled, true);
       arrayPool.assertNoError();
@@ -1288,13 +1310,18 @@ Deno.test(async function errorPaths(t) {
       },
     );
 
-    await run(new Context(contextOptions), ({ $s, $i }) => {
-      const a = pureCopy($s([1, 2]));
-      const b = pureCopy($s([3, 4]));
-      const outA = $i(() => arrayPool.provide(2));
-      const outB = $i(() => arrayPool.provide(2));
-      explode([outA, outB], a, b);
-    });
+    await assertRejects(
+      () =>
+        run(new Context(contextOptions), ({ $s, $i }) => {
+          const a = pureCopy($s([1, 2]));
+          const b = pureCopy($s([3, 4]));
+          const outA = $i(() => arrayPool.provide(2));
+          const outB = $i(() => arrayPool.provide(2));
+          explode([outA, outB], a, b);
+        }),
+      Error,
+      "test",
+    );
 
     arrayPool.assertNoError();
   });
