@@ -14,158 +14,174 @@ Each feature is provided in a modular, customizable way, and you can combine the
 
 ## Problem: Calculations on Arrays
 
-Let's start with a problem: calculating the inner products of many pairs of 3D vectors. Storing the vectors in a structure-of-arrays (SoA) layout, their components are given as six arrays of numbers (`a` through `f`). The array of inner products is then calculated as `(a * b) + (c * d) + (e * f)`.
-
-We'll define `add` and `mul` as independent functions for maintainability.
-
-One implementation might look like:
+Consider element-wise `add` and `mul` routines on arrays:
 
 ```ts
-// Answer X
-
-function add(lht: number[], rht: number[]): number[] {
-  const output: number[] = new Array(lht.length);
-  for (let i = 0; i < output.length; i++) {
-    output[i] = lht[i] + rht[i];
+const add = (a: number[], b: number[]): number[] => {
+  const out: number[] = new Array(a.length);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = a[i] + b[i];
   }
-  return output;
-}
+  return out;
+};
 
-function mul(lht: number[], rht: number[]): number[] {
-  const output: number[] = new Array(lht.length);
-  for (let i = 0; i < output.length; i++) {
-    output[i] = lht[i] * rht[i];
+const mul = (a: number[], b: number[]): number[] => {
+  const out: number[] = new Array(a.length);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = a[i] * b[i];
   }
-  return output;
-}
+  return out;
+};
+```
 
-function innerProduct(a: number[], b: number[], c: number[], d: number[], e: number[], f: number[]): number[] {
-  const m1 = mul(a, b);   // alloc
-  const m2 = mul(c, d);   // alloc
-  const m3 = mul(e, f);   // alloc
-  const s1 = add(m1, m2); // alloc
-  const s2 = add(s1, m3); // alloc
+Now suppose we want to compute an element-wise inner product of two 3-component vector arrays:
+
+$$(\mathbf{a} \cdot \mathbf{b}) = a_x \times b_x + a_y \times b_y + a_z \times b_z$$
+
+In total, we need to perform multiplication 3 times and addition 2 times.
+
+### Solution A (Function Style)
+
+```ts
+const innerProduct = (
+  ax: number[], ay: number[], az: number[],
+  bx: number[], by: number[], bz: number[],
+): number[] => {
+  const m1 = mul(ax, bx);
+  const m2 = mul(ay, by);
+  const m3 = mul(az, bz);
+  const s1 = add(m1, m2);
+  const s2 = add(s1, m3);
   return s2;
-}
+};
 ```
 
-We can also define `add` and `mul` to take the output buffer as an argument. This leads to a different implementation:
+Simple and readable, but each call creates a new array: **5 allocations** per call to `innerProduct`.
+
+### Solution B (Procedure Style)
+
+We can reduce allocations by passing output buffers as arguments instead of returning new arrays:
 
 ```ts
-// Answer Y
-
-function add(output: number[], lht: number[], rht: number[]) {
-  for (let i = 0; i < output.length; i++) {
-    output[i] = lht[i] + rht[i];
+const add = (out: number[], a: number[], b: number[]): void => {
+  for (let i = 0; i < out.length; i++) {
+    out[i] = a[i] + b[i];
   }
-}
+};
 
-function mul(output: number[], lht: number[], rht: number[]) {
-  for (let i = 0; i < output.length; i++) {
-    output[i] = lht[i] * rht[i];
+const mul = (out: number[], a: number[], b: number[]): void => {
+  for (let i = 0; i < out.length; i++) {
+    out[i] = a[i] * b[i];
   }
-}
+};
 
-function innerProduct(output: number[], a: number[], b: number[], c: number[], d: number[], e: number[], f: number[]) {
-  const m1 = new Array(output.length); // alloc
-  const m2 = new Array(output.length); // alloc
-  const s = new Array(output.length);  // alloc
-  mul(m1, a, b);
-  mul(m2, c, d);
-  add(s, m1, m2);
-  mul(m1, e, f); // contents of `m1` are no longer required, reuse array
-  add(output, s, m1);
-}
+const innerProduct = (
+  ax: number[], ay: number[], az: number[],
+  bx: number[], by: number[], bz: number[],
+): number[] => {
+  const m1 = new Array(ax.length);
+  const m2 = new Array(ax.length);
+  const s1 = new Array(ax.length);
+  const s2 = new Array(ax.length);
+  mul(m1, ax, bx);
+  mul(m2, ay, by);
+  add(s1, m1, m2);
+  mul(m1, az, bz); // contents of `m1` are no longer required, reuse array
+  add(s2, s1, m1);
+  return s2;
+};
 ```
 
-Let's call the first implementation "Answer X" and the second "Answer Y", and compare them.
+Manual buffer management brings allocations down to **4** and allows buffer reuse, but managing buffers manually is tedious.
 
-### Allocation
+### Reducing Allocations Further
 
-First, look at allocations. In Answer X, buffer allocations happen inside `add` and `mul`, and they are returned from those functions. The number of allocations is 5, which equals the number of invocations of `add` and `mul`.
-
-In contrast, in Answer Y, buffer allocations are done in the caller `innerProduct` and the buffers are passed to the functions. The number of allocations is 3, which is fewer than in Answer X.
-
-To reduce allocations further, we can introduce an object pool into Answer Y. Let's call this "Answer Y'". In Answer Y', no allocations are performed after the second invocation of `innerProduct`. Therefore, the number of allocations is virtually 0 if the function is called many times.
+Since we're already managing buffers manually, we can use an object pool to reuse arrays across calls.
 
 ```ts
-// Answer Y'
-
-interface ArrayPool {
-  acquire(length: number): number[];
-  release(obj: number[]): void;
+interface Pool {
+  acquire(len: number): number[];
+  release(o: number[]): void;
 }
-const pool: ArrayPool = { /* some implementation */ };
+declare const pool: Pool;
 
-function innerProduct(output: number[], a: number[], b: number[], c: number[], d: number[], e: number[], f: number[]) {
-  const m1 = pool.acquire(output.length);
-  const m2 = pool.acquire(output.length);
-  mul(m1, a, b);
-  mul(m2, c, d);
-  const s = pool.acquire(output.length);
-  add(s, m1, m2);
+const innerProduct = (
+  ax: number[], ay: number[], az: number[],
+  bx: number[], by: number[], bz: number[],
+): number[] => {
+  const out = new Array(ax.length);
+  const m1 = pool.acquire(ax.length);
+  const m2 = pool.acquire(ax.length);
+  mul(m1, ax, bx);
+  mul(m2, ay, by);
+  const s1 = pool.acquire(ax.length);
+  add(s1, m1, m2);
   pool.release(m1); // `m1` is no longer required
   pool.release(m2); // `m2` is no longer required
-  const m3 = pool.acquire(output.length);
-  mul(m3, e, f);
-  add(output, s, m3);
+  const m3 = pool.acquire(ax.length);
+  mul(m3, az, bz);
+  add(out, s1, m3);
   pool.release(m3); // `m3` is no longer required
-  pool.release(s);  // `s` is no longer required
-}
+  pool.release(s1); // `s1` is no longer required
+  return out;
+};
 ```
 
-### Composability
+With an object pool, the number of steady-state allocations for intermediate buffers drops to **0**. However, the code has become much more complex: the caller must track buffer lifetimes and manage acquire/release calls manually.
 
-How about the composability of `add` and `mul`? In Answer X, the implementation of `innerProduct` is quite straightforward. However, in Answer Y, we manage buffer lifetimes manually to reduce allocations, which harms readability.
+### Comparison
 
-Answer Y' has the same problem as Answer Y. We must also manage buffer lifetimes manually in this case.
+- **Solution A** : Easy to compose and read, but allocation-heavy.
+- **Solution B** : Gives control over allocation and reuse, but burdens the caller with buffer lifetime management.
 
-### Overall Comparison
+Is this strictly a trade-off?
 
-Both Answer X and Answer Y (and Y') have pros and cons. Answer X seems better for maintainability. However, Answer Y (and Y') wins in terms of efficiency. This is a trade-off.
+## Proction's Solution
 
-## Solution
-
-Proction was created to tackle this dilemma. It takes the strengths of both Answer X and Answer Y. It also addresses several related problems. Below is an example of how `innerProduct` can be written with Proction. It's a bit verbose for clarity.
+Proction was created to tackle this dilemma. It takes the strengths of both Function Style and Procedure Style. It also addresses several related problems. Below is an example of how `innerProduct` can be written with Proction. It's a bit verbose for clarity.
 
 ```ts
 import { Context, run, proc, toFunc, provider } from "jsr:@nontan-rh/proction";
 
-interface ArrayPool {
-  acquire(length: number): number[];
-  release(obj: number[]): void;
+interface Pool {
+  acquire(len: number): number[];
+  release(o: number[]): void;
 }
-const pool: ArrayPool = { /* some implementation */ };
-const provide = provider((length) => pool.acquire(length), (obj) => pool.release(obj));
+declare const pool: Pool;
+const provide = provider((len: number) => pool.acquire(len), (o) => pool.release(o));
 
-const addProc = proc((output: number[], lht: number[], rht: number[]) => {
-  for (let i = 0; i < output.length; i++) {
-    output[i] = lht[i] + rht[i];
+const addProc = proc((out: number[], a: number[], b: number[]) => {
+  for (let i = 0; i < out.length; i++) {
+    out[i] = a[i] + b[i];
   }
 });
-const mulProc = proc((output: number[], lht: number[], rht: number[]) => {
-  for (let i = 0; i < output.length; i++) {
-    output[i] = lht[i] * rht[i];
+const mulProc = proc((out: number[], a: number[], b: number[]) => {
+  for (let i = 0; i < out.length; i++) {
+    out[i] = a[i] * b[i];
   }
 });
 
-const addFunc = toFunc(addProc, (lht, _rht) => provide(lht.length));
-const mulFunc = toFunc(mulProc, (lht, _rht) => provide(lht.length));
+const addFunc = toFunc(addProc, (a, _b) => provide(a.length));
+const mulFunc = toFunc(mulProc, (a, _b) => provide(a.length));
 
 const ctx = new Context();
-async function innerProduct(output: number[], a: number[], b: number[], c: number[], d: number[], e: number[], f: number[]) {
+async function innerProduct(
+  out: number[],
+  ax: number[], ay: number[], az: number[],
+  bx: number[], by: number[], bz: number[],
+) {
   await run(ctx, ({ $s, $d }) => {
-    const m1 = mulFunc($s(a), $s(b));
-    const m2 = mulFunc($s(c), $s(d));
-    const m3 = mulFunc($s(e), $s(f));
+    const m1 = mulFunc($s(ax), $s(bx));
+    const m2 = mulFunc($s(ay), $s(by));
+    const m3 = mulFunc($s(az), $s(bz));
     const s1 = addFunc(m1, m2);
-    addProc($d(output), s1, m3);
+    addProc($d(out), s1, m3);
   });
-  // Now `output` stores the result!
+  // Now `out` stores the result!
 }
 ```
 
-In this example, `innerProduct` remains simple like Answer X, while using a pool like Answer Y' and effectively keeping steady-state allocations at 0.
+In this example, `innerProduct` remains simple like Solution A, while using a pool like Solution B and effectively keeping steady-state allocations at 0.
 
 The following sections describe the core concepts and how they work.
 
@@ -178,14 +194,14 @@ There are three core concepts: procedures, functions, and conversions between th
 In this library, a procedure is a routine that takes both input data and an output buffer as arguments. It computes a result and writes it to the given buffer. Consider a procedure that adds corresponding elements of two arrays.
 
 ```ts
-function addProcedure(output: number[], lht: number[], rht: number[]) {
-  for (let i = 0; i < output.length; i++) {
-    output[i] = lht[i] + rht[i];
+function add(out: number[], a: number[], b: number[]) {
+  for (let i = 0; i < out.length; i++) {
+    out[i] = a[i] + b[i];
   }
 }
 ```
 
-`addProcedure` takes `lht` and `rht` as input arguments, and `output` as an output buffer. It doesn't allocate resources, and the caller can pass any `number[]` buffer regardless of how it was allocated. Although this example uses arrays, arguments can be of any object type.
+`add` takes `a` and `b` as input arguments, and `out` as an output buffer. It doesn't allocate resources, and the caller can pass any `number[]` buffer regardless of how it was allocated. Although this example uses arrays, arguments can be of any object type.
 
 This style is especially useful when the output buffer is externally managed or involves I/O features such as a display framebuffer. In low-level languages like C, this also applies to memory-mapped (`mmap`) regions.
 
@@ -196,16 +212,16 @@ This is the simplest form of routine and the best in terms of cohesion. Proction
 A function is a routine that takes only input data and returns the output data. The buffers for the output data are allocated internally. An adding function could be written like this:
 
 ```ts
-function addFunction(lht: number[], rht: number[]): number[] {
-  const output: number[] = new Array(lht.length);
-  for (let i = 0; i < output.length; i++) {
-    output[i] = lht[i] + rht[i];
+function add(a: number[], b: number[]): number[] {
+  const out: number[] = new Array(a.length);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = a[i] + b[i];
   }
-  return output;
+  return out;
 }
 ```
 
-`addFunction` only takes `lht` and `rht` as input arguments. The result is returned by the function and the array is allocated internally. The caller is free from explicitly allocating an output buffer; however, it cannot control how buffers are allocated. For example, object pools or custom allocators for `ArrayBuffer`s can't be used in this style.
+`add` only takes `a` and `b` as input arguments. The result is returned by the function and the array is allocated internally. The caller is free from explicitly allocating an output buffer; however, it cannot control how buffers are allocated. For example, object pools or custom allocators for `ArrayBuffer`s can't be used in this style.
 
 Function-style routines are very easy to use. Proction lets you compose subroutines in this form.
 
@@ -215,18 +231,18 @@ Proction uses indirect routines and provides tools for creating indirect procedu
 Indirect routines take and return indirect handles instead of the actual objects. The signature looks like this:
 
 ```ts
-function indirectAddProcedure(output: Handle<number[]>, lht: Handle<number[]>, rht: Handle<number[]>);
+function addProc(out: Handle<number[]>, a: Handle<number[]>, b: Handle<number[]>): void;
 ```
 
-A `Handle<T>` is an internal reference to a value of type `T` that Proction tracks for dependency and lifetime management; you obtain handles from the actual objects via special functions later.
+A `Handle<T>` is an internal reference to a value of type `T` that Proction tracks for dependency and lifetime management; you obtain handles from actual objects via special helper functions later.
 
-To create indirect procedures easily, Proction provides the `proc` utility. You can define `indirectAddProcedure` like this:
+To create indirect procedures easily, Proction provides the `proc` utility. You can define `addProc` like this:
 
 ```ts
-const indirectAddProcedure = proc(
-  function addProcedure(output: number[], lht: number[], rht: number[]) {
-    for (let i = 0; i < output.length; i++) {
-      output[i] = lht[i] + rht[i];
+const addProc = proc(
+  function add(out: number[], a: number[], b: number[]) {
+    for (let i = 0; i < out.length; i++) {
+      out[i] = a[i] + b[i];
     }
   }
 );
@@ -237,8 +253,8 @@ The `toFunc` utility converts indirect procedures into indirect functions.
 ```ts
 const provide = provider((length) => new Array(length), () => {});
 
-// function indirectAddFunction(lht: Handle<number[]>, rht: Handle<number[]>): Handle<number[]>
-const indirectAddFunction = toFunc(indirectAddProcedure, (lht, _rht) => provide(lht.length));
+// function addFunc(a: Handle<number[]>, b: Handle<number[]>): Handle<number[]>
+const addFunc = toFunc(addProc, (a, _b) => provide(a.length));
 ```
 
 This introduces the "provider" concept required for the conversion. In this example, the provider allocates a new array for the result of each function call. We'll describe providers in more detail later.
@@ -251,21 +267,25 @@ We can call and compose indirect routines to perform more complex computations i
 
 ```ts
 // Assume these indirect routines are already defined:
-// function addProc(output: Handle<number[]>, lht: Handle<number[]>, rht: Handle<number[]>);
-// function addFunc(lht: Handle<number[]>, rht: Handle<number[]>): Handle<number[]>;
-// function mulProc(output: Handle<number[]>, lht: Handle<number[]>, rht: Handle<number[]>);
-// function mulFunc(lht: Handle<number[]>, rht: Handle<number[]>): Handle<number[]>;
+declare function addProc(out: Handle<number[]>, a: Handle<number[]>, b: Handle<number[]>): void;
+declare function addFunc(a: Handle<number[]>, b: Handle<number[]>): Handle<number[]>;
+declare function mulProc(out: Handle<number[]>, a: Handle<number[]>, b: Handle<number[]>): void;
+declare function mulFunc(a: Handle<number[]>, b: Handle<number[]>): Handle<number[]>;
 
 const ctx = new Context();
-async function innerProduct(output: number[], a: number[], b: number[], c: number[], d: number[], e: number[], f: number[]) {
+async function innerProduct(
+  out: number[],
+  ax: number[], ay: number[], az: number[],
+  bx: number[], by: number[], bz: number[],
+) {
   await run(ctx, ({ $s, $d }) => {
-    const m1 = mulFunc($s(a), $s(b));
-    const m2 = mulFunc($s(c), $s(d));
-    const m3 = mulFunc($s(e), $s(f));
+    const m1 = mulFunc($s(ax), $s(bx));
+    const m2 = mulFunc($s(ay), $s(by));
+    const m3 = mulFunc($s(az), $s(bz));
     const s1 = addFunc(m1, m2);
-    addProc($d(output), s1, m3);
+    addProc($d(out), s1, m3);
   });
-  // Now `output` stores the result!
+  // Now `out` stores the result!
 }
 ```
 
@@ -276,17 +296,17 @@ Handles for input data can be created with `$s`, and those for output data with 
 Providers attach to indirect functions and enable you to manage how intermediate buffers are allocated and freed, independently of the implementation details of the underlying indirect procedures.
 
 ```ts
-interface ArrayPool {
-  acquire(length: number): number[];
-  release(obj: number[]): void;
+interface Pool {
+  acquire(len: number): number[];
+  release(o: number[]): void;
 }
-const pool: ArrayPool = { /* some implementation */ };
+declare const pool: Pool;
 
-const provide = provider((length) => pool.acquire(length), (obj) => pool.release(obj));
-const indirectAddFunctionWithPool = toFunc(indirectAddProcedure, (lht, _rht) => provide(lht.length));
+const provide = provider((len: number) => pool.acquire(len), (obj) => pool.release(obj));
+const addFunc = toFunc(addProc, (a, _b) => provide(a.length));
 ```
 
-You can completely reuse `indirectAddProcedure` and customize the resource management. The objects are returned to the provider as soon as they are no longer required. Concretely, Proction tracks the data-dependency graph and releases provider-managed buffers after all downstream consumers complete. Thanks to object pools, the number of array allocations is minimized and buffers are reused when possible, reducing GC pressure in steady state.
+You can completely reuse `addProc` and customize the resource management. The objects are returned to the provider as soon as they are no longer required. Concretely, Proction tracks the data-dependency graph and releases provider-managed buffers after all downstream consumers complete. Thanks to object pools, the number of array allocations is minimized and buffers are reused when possible, reducing GC pressure in steady state.
 
 ## In-Place Optimization
 
@@ -298,10 +318,10 @@ Proction supports this pattern with `procI` (and its multi-output variants `proc
 
 ```ts
 const double = procI(
-  // Out-of-place implementation: writes to `output`, reads `input0`
-  function doubleOutOfPlace(output: number[], input0: number[]) {
-    for (let i = 0; i < output.length; i++) {
-      output[i] = input0[i] * 2;
+  // Out-of-place implementation: writes to `out`, reads `input0`
+  function doubleOutOfPlace(out: number[], input: number[]) {
+    for (let i = 0; i < out.length; i++) {
+      out[i] = input[i] * 2;
     }
   },
   // In-place implementation: modifies `inout` directly
@@ -322,12 +342,12 @@ When you use `pureDouble` in a `run` block, Proction automatically decides which
 `proc` can take `async` JavaScript functions as their implementation to enable parallel computing. You can use Web Workers, for example, to take advantage of multi-core CPUs. Here is a very simplified example.
 
 ```ts
-const worker: Worker = /* some worker implementation */;
-const indirectAddProcedure = proc(
-  async function addProcedure(output: number[], lht: number[], rht: number[]) {
+declare const worker: Worker;
+const addProc = proc(
+  async function add(out: number[], a: number[], b: number[]) {
     const { promise, resolve } = Promise.withResolvers();
     worker.onmessage = resolve;
-    worker.postMessage([output, lht, rht]);
+    worker.postMessage([out, a, b]);
     await promise;
   }
 );
@@ -340,30 +360,30 @@ Function-style indirect routines and Proction's task scheduler prevent data race
 Middlewares in Proction are similar to those in other JavaScript libraries. They wrap indirect routines and must invoke the next action in the chain. Middlewares can be installed when you create indirect procedures with `proc`.
 
 ```ts
-const add = proc(
-  function addProcedure(output: number[], lht: number[], rht: number[]) {
-    for (let i = 0; i < output.length; i++) {
-      output[i] = lht[i] + rht[i];
+const addProc = proc(
+  function add(out: number[], a: number[], b: number[]) {
+    for (let i = 0; i < out.length; i++) {
+      out[i] = a[i] + b[i];
     }
   },
   {
     middlewares: [async (next) => {
-      console.log("before addProcedure");
+      console.log("before add");
       await next();
-      console.log("after addProcedure");
+      console.log("after add");
     }],
   },
 );
 ```
 
-The `async` nature of middlewares also makes them a powerful tool for scheduling routine execution.
+The `async` nature of middleware also makes it a powerful tool for scheduling routine execution.
 
 ```ts
 interface Semaphore {
   acquire(): Promise<void>;
   release(): Promise<void>;
 }
-const semaphore: Semaphore = /* some semaphore implementation */;
+declare const semaphore: Semaphore;
 
 const limitConcurrency = async (next: () => Promise<void>) => {
   await semaphore.acquire();
@@ -377,28 +397,28 @@ const limitConcurrency = async (next: () => Promise<void>) => {
 
 Proction starts all invocations of indirect routines as soon as their dependent tasks complete and input data is ready. Therefore, you can effectively control the degree of parallelism with semaphores, and they can be easily integrated with the middleware feature.
 
-You can also define more sophisticated middlewares that control the order of execution by introducing priorities to the semaphore. Middlewares can be very powerful in Proction.
+You can also define more sophisticated middleware that controls execution order by introducing priorities to the semaphore. Middleware can be a powerful abstraction in Proction.
 
 ## Multiple Outputs
 
-To define a routine with multiple outputs, use `procN` / `toFuncN`. The output argument and return value are tuple-like arrays. You can use multiple-output routines in the same way as the single-output ones.
+To define a routine with multiple outputs, use `procN` / `toFuncN`. The output argument and return value are tuple-like arrays. You can use multiple-output routines in the same way as the single-output variants.
 
 ```ts
-const sincosProc = procN(([sinOutput, cosOutput]: [number[], number[]], x: number[]) => {
-  for (let i = 0; i < sinOutput.length; i++) {
-    sinOutput[i] = Math.sin(x[i]);
-    cosOutput[i] = Math.cos(x[i]);
+const sincosProc = procN(([sinOut, cosOut]: [number[], number[]], x: number[]) => {
+  for (let i = 0; i < sinOut.length; i++) {
+    sinOut[i] = Math.sin(x[i]);
+    cosOut[i] = Math.cos(x[i]);
   }
 });
-// function sincosProc(outputs: [Handle<number[]>, Handle<number[]>], x: Handle<number[]>);
+// function sincosProc(outs: [Handle<number[]>, Handle<number[]>], x: Handle<number[]>): void;
 
 const sincosFunc = toFuncN(sincosProc, [(x) => provide(x.length), (x) => provide(x.length)]);
 // function sincosFunc(x: Handle<number[]>): [Handle<number[]>, Handle<number[]>];
 
 const ctx = new Context();
-async function sincos(sinOutput: number[], cosOutput: number[], x: number[]) {
+async function sincos(sinOut: number[], cosOut: number[], x: number[]) {
   await run(ctx, ({ $s, $d }) => {
-    sincosProc([$d(sinOutput), $d(cosOutput)], $s(x));
+    sincosProc([$d(sinOut), $d(cosOut)], $s(x));
   });
 }
 ```
