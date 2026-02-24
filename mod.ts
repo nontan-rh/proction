@@ -196,6 +196,9 @@ export type ProcOptions = {
   middlewares?: MiddlewareFn[];
 };
 
+type ProcID = Brand<number, "procID">;
+const generateProcID: () => ProcID = idGenerator((x: number) => x as ProcID);
+
 // NOTE: The order of preparing outputs and restoring inputs is important,
 // especially for in-place routines.
 //
@@ -229,6 +232,7 @@ export function proc<O, I extends readonly unknown[]>(
   output: Handle<O>,
   ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => void {
+  const procID = generateProcID();
   const middlewares = procOptions?.middlewares ?? [];
 
   const g = (
@@ -249,6 +253,7 @@ export function proc<O, I extends readonly unknown[]>(
       }
     };
     const invocation: Invocation = {
+      procID,
       id,
       inputs,
       outputs: [output],
@@ -288,6 +293,7 @@ export function procI<IO, I extends readonly unknown[]>(
   input0: Handle<IO>,
   ...restInputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => void {
+  const procID = generateProcID();
   const middlewares = procOptions?.middlewares ?? [];
 
   const g = (
@@ -365,6 +371,7 @@ export function procI<IO, I extends readonly unknown[]>(
     };
 
     const invocation: Invocation = {
+      procID,
       id,
       inputs: [input0, ...restInputs],
       outputs: [output],
@@ -399,6 +406,7 @@ export function procN<
   outputs: { [key in keyof O]: Handle<O[key]> }, // expanded for readability of inferred type
   ...inputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => void {
+  const procID = generateProcID();
   const middlewares = procOptions?.middlewares ?? [];
 
   const g = (
@@ -419,6 +427,7 @@ export function procN<
       }
     };
     const invocation: Invocation = {
+      procID,
       id,
       inputs,
       outputs,
@@ -468,6 +477,7 @@ export function procNI1<
   input0: Handle<IO>,
   ...restInputs: { [key in keyof I]: Handle<I[key]> } // expanded for readability of inferred type
 ) => void {
+  const procID = generateProcID();
   const middlewares = procOptions?.middlewares ?? [];
 
   const g = (
@@ -556,6 +566,7 @@ export function procNI1<
     };
 
     const invocation: Invocation = {
+      procID,
       id,
       inputs: [input0, ...restInputs],
       outputs,
@@ -610,6 +621,7 @@ export function procNIAll<
     outputs: MappedHandleType<IO>,
     ...restInputs: [...MappedHandleType<IO>, ...MappedHandleType<I>]
   ) => {
+    const procID = generateProcID();
     const plan = getPlan(outputs, ...restInputs);
 
     const ioLength = outputs.length;
@@ -707,6 +719,7 @@ export function procNIAll<
     };
 
     const invocation: Invocation = {
+      procID,
       id,
       inputs: [...ioInputs, ...additionalInputs],
       outputs: outputs,
@@ -822,6 +835,7 @@ interface ResolveContext {
  * It is the unit of execution of a Proction program.
  */
 interface Invocation {
+  readonly procID: ProcID;
   readonly id: InvocationID;
   readonly inputs: readonly UntypedHandle[];
   readonly outputs: readonly UntypedHandle[];
