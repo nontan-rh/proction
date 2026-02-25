@@ -851,6 +851,11 @@ interface Invocation {
  */
 const contextOptionsKey = Symbol("contextOptions");
 
+type ExternalObjectID = Brand<number, "externalObjectID">;
+const externalObjectIDMapKey = Symbol("objectObjectIDMap");
+
+const getExternalObjectIDKey = Symbol("getExternalObjectIDKey");
+
 /**
  * A context for a Proction program. It is expected to live some long span in an application.
  */
@@ -859,6 +864,12 @@ export class Context {
    * The options of the context.
    */
   [contextOptionsKey]: ContextOptions;
+
+  [externalObjectIDMapKey]: WeakMap<object, ExternalObjectID> = new WeakMap();
+
+  #generateExternalObjectID: () => ExternalObjectID = idGenerator((x) =>
+    x as ExternalObjectID
+  );
 
   /**
    * Creates a new context.
@@ -877,6 +888,17 @@ export class Context {
     };
 
     this[contextOptionsKey] = mergedOptions;
+  }
+
+  [getExternalObjectIDKey](o: object): ExternalObjectID {
+    const stored = this[externalObjectIDMapKey].get(o);
+    if (stored) {
+      return stored;
+    }
+
+    const id = this.#generateExternalObjectID();
+    this[externalObjectIDMapKey].set(o, id);
+    return id;
   }
 }
 
@@ -1032,7 +1054,11 @@ type DataSlot =
 /**
  * An internal type to represent a source slot.
  */
-type SourceSlot = { type: "source"; body: unknown };
+type SourceSlot = {
+  type: "source";
+  body: unknown;
+  externalObjectID: ExternalObjectID;
+};
 /**
  * An internal type to represent an intermediate slot.
  */
@@ -1044,7 +1070,11 @@ type IntermediateSlot = {
 /**
  * An internal type to represent a destination slot.
  */
-type DestinationSlot = { type: "destination"; body: unknown };
+type DestinationSlot = {
+  type: "destination";
+  body: unknown;
+  externalObjectID: ExternalObjectID;
+};
 
 /**
  * An internal function to create a source handle and a source slot. It is the implementation of $s function.
@@ -1069,6 +1099,7 @@ function source<T extends object>(plan: Plan, value: T): Handle<T> {
   plan[internalPlanKey].dataSlots.set(handle[handleIdKey], {
     type: "source",
     body: value,
+    externalObjectID: plan.context[getExternalObjectIDKey](value),
   });
   plan[internalPlanKey].inputCache.set(value, handle);
 
@@ -1098,6 +1129,7 @@ function destination<T extends object>(plan: Plan, value: T): Handle<T> {
   plan[internalPlanKey].dataSlots.set(handle[handleIdKey], {
     type: "destination",
     body: value,
+    externalObjectID: plan.context[getExternalObjectIDKey](value),
   });
   plan[internalPlanKey].outputCache.set(value, handle);
 
