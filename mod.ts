@@ -176,6 +176,10 @@ export function getPlan(
   return plan;
 }
 
+export type Version = Brand<number, "Version">;
+
+export type SetVersionFn = (version: Version) => void;
+
 /**
  * An internal type to represent an invocation.
  */
@@ -919,8 +923,9 @@ export async function run(
   };
   plan[internalPlanKey].plan = plan;
   const runContext: RunContext = {
-    $s: (value) => source(plan, value),
-    $d: (value) => destination(plan, value),
+    $s: (value, version = undefined) => source(plan, value, version),
+    $d: (value, version = undefined, setVersion = undefined) =>
+      destination(plan, value, version, setVersion),
     $i: (provide) => intermediate(plan, provide),
   };
   bodyFn(runContext);
@@ -964,14 +969,18 @@ export type RunContext = {
    * @param value The external resource.
    * @returns The read-only source handle.
    */
-  $s<T extends object>(value: T): Handle<T>;
+  $s<T extends object>(value: T, version?: Version): Handle<T>;
   /**
    * Creates a write-only destination handle from an external resource.
    * @typeparam T The type of the external resource.
    * @param value The external resource.
    * @returns The write-only destination handle.
    */
-  $d<T extends object>(value: T): Handle<T>;
+  $d<T extends object>(
+    value: T,
+    version?: Version,
+    setVersion?: SetVersionFn,
+  ): Handle<T>;
   /**
    * Creates an intermediate handle.
    * @typeparam T The type of the provided object.
@@ -1058,6 +1067,7 @@ type SourceSlot = {
   type: "source";
   body: unknown;
   externalObjectID: ExternalObjectID;
+  version: Version | undefined;
 };
 /**
  * An internal type to represent an intermediate slot.
@@ -1074,6 +1084,8 @@ type DestinationSlot = {
   type: "destination";
   body: unknown;
   externalObjectID: ExternalObjectID;
+  version: Version | undefined;
+  setVersion: SetVersionFn | undefined;
 };
 
 /**
@@ -1083,7 +1095,11 @@ type DestinationSlot = {
  * @param value The external resource.
  * @returns The source handle.
  */
-function source<T extends object>(plan: Plan, value: T): Handle<T> {
+function source<T extends object>(
+  plan: Plan,
+  value: T,
+  version: Version | undefined,
+): Handle<T> {
   const cached = plan[internalPlanKey].inputCache.get(value);
   if (cached) {
     return cached as Handle<T>;
@@ -1100,6 +1116,7 @@ function source<T extends object>(plan: Plan, value: T): Handle<T> {
     type: "source",
     body: value,
     externalObjectID: plan.context[getExternalObjectIDKey](value),
+    version,
   });
   plan[internalPlanKey].inputCache.set(value, handle);
 
@@ -1113,7 +1130,12 @@ function source<T extends object>(plan: Plan, value: T): Handle<T> {
  * @param value The external resource.
  * @returns The destination handle.
  */
-function destination<T extends object>(plan: Plan, value: T): Handle<T> {
+function destination<T extends object>(
+  plan: Plan,
+  value: T,
+  version: Version | undefined,
+  setVersion: SetVersionFn | undefined,
+): Handle<T> {
   const cached = plan[internalPlanKey].outputCache.get(value);
   if (cached) {
     return cached as Handle<T>;
@@ -1130,6 +1152,8 @@ function destination<T extends object>(plan: Plan, value: T): Handle<T> {
     type: "destination",
     body: value,
     externalObjectID: plan.context[getExternalObjectIDKey](value),
+    version,
+    setVersion,
   });
   plan[internalPlanKey].outputCache.set(value, handle);
 
