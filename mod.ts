@@ -54,6 +54,7 @@ import type { DisposableWrap } from "./_provider.ts";
 import { DelayedRc } from "./_delayedrc.ts";
 import { idGenerator } from "./_idgenerator.ts";
 import { defaultScheduler, type Scheduler } from "./_scheduler.ts";
+import { generateProcID, ProcID } from "./_graph.ts";
 export type {
   AcquireFn,
   DisposableWrap,
@@ -199,9 +200,6 @@ export type ProcOptions = {
    */
   middlewares?: MiddlewareFn[];
 };
-
-type ProcID = Brand<number, "procID">;
-const generateProcID: () => ProcID = idGenerator((x: number) => x as ProcID);
 
 // NOTE: The order of preparing outputs and restoring inputs is important,
 // especially for in-place routines.
