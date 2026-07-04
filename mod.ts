@@ -54,7 +54,7 @@ import type { DisposableWrap } from "./_provider.ts";
 import { DelayedRc } from "./_delayedrc.ts";
 import { idGenerator } from "./_idgenerator.ts";
 import { defaultScheduler, type Scheduler } from "./_scheduler.ts";
-import { generateProcID, ProcID } from "./_graph.ts";
+import { generateProcID, type ProcID } from "./_graph.ts";
 export type {
   AcquireFn,
   DisposableWrap,
