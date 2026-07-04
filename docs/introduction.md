@@ -382,8 +382,8 @@ Incremental runs rely on two rules:
 A few details to be aware of:
 
 - A skipped calculation does not execute at all, so middlewares attached to its procedure are not invoked on runs that skip it.
-- When the same object is passed to `$s` (or `$d`) more than once in one run body, the version claims must agree: conflicting versions raise an error, and a versioned call mixed with an unversioned one falls back to unversioned.
-- Runs on a single `Context` must not overlap when using versions; an overlapping versioned run is rejected with an error.
+- When the same object is passed to `$s` more than once in one run body, every call must claim the same version (or all omit it); any disagreement raises an error. Passing the same object to `$d` more than once raises an error.
+- Runs on a single `Context` must not overlap; an overlapping run is rejected with an error.
 - History for wirings that stop being submitted is eventually forgotten; the only cost is a recalculation the next time they appear.
 
 ## Parallelism

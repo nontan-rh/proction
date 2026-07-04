@@ -22,8 +22,8 @@
  * after a successful run, and must be passed back verbatim. Proc bodies must
  * be deterministic and free of side effects other than writing their
  * declared outputs. Invocations skipped as up-to-date do not execute, so
- * their middlewares are not invoked. Versioned runs on one context must not
- * overlap; an overlapping versioned run is rejected with an error.
+ * their middlewares are not invoked. Runs on one context must not overlap;
+ * an overlapping run is rejected with an error.
  *
  * @example
  *
@@ -76,10 +76,10 @@ import {
   type GraphRun,
   type InvocationDraft,
   type ProcID,
-  toSourceDataVersion,
   unknownDataVersion,
   unresolvedIntermediateDataID,
   unresolvedIntermediateDataVersion,
+  versionToSourceDataVersion,
 } from "./_graph.ts";
 export type {
   AcquireFn,
@@ -902,10 +902,16 @@ const contextOptionsKey = Symbol("contextOptions");
 const graphKey = Symbol("graph");
 
 /**
- * An internal symbol used for the key of the flag that marks a versioned run
- * in progress on a context.
+ * An internal symbol used for the key of the run state of a context.
  */
-const versionedRunKey = Symbol("versionedRun");
+const stateKey = Symbol("state");
+
+/**
+ * An internal type to represent the run state of a context. Runs mutate the
+ * shared graph and must not overlap, so the state also acts as the semaphore
+ * that rejects overlapping runs.
+ */
+type ContextState = "idle" | "planning" | "running";
 
 /**
  * A context for a Proction program. It is expected to live some long span in an application.
@@ -922,10 +928,9 @@ export class Context {
   [graphKey]: Graph = new Graph();
 
   /**
-   * Whether a versioned run is in progress. Versioned runs mutate the shared
-   * graph and must not overlap.
+   * The run state. A new run is accepted only in the "idle" state.
    */
-  [versionedRunKey] = false;
+  [stateKey]: ContextState = "idle";
 
   /**
    * Creates a new context.
@@ -1011,9 +1016,8 @@ export type RunContext = {
    * @param version The version of the content of the resource, a non-negative
    * integer managed by the caller. It enables incremental calculation: change
    * it whenever the content changes. If omitted, the content is treated as
-   * changed every run. Repeated `$s` calls on the same object must agree:
-   * conflicting versions throw, and a versioned call mixed with an
-   * unversioned one falls back to unversioned.
+   * changed every run. Repeated `$s` calls on the same object must claim the
+   * same version (or all omit it); any disagreement throws.
    * @returns The read-only source handle.
    */
   $s<T extends object>(value: T, version?: number): Handle<T>;
@@ -1025,12 +1029,10 @@ export type RunContext = {
    * as previously reported via setVersion. It enables incremental
    * calculation: an invocation writing this destination can be skipped when
    * the version matches the recorded result. If omitted, the content is
-   * treated as unknown and the writing invocation always runs. Repeated `$d`
-   * calls on the same object must agree: conflicting versions throw, and a
-   * versioned call mixed with an unversioned one falls back to unversioned.
+   * treated as unknown and the writing invocation always runs. Each object
+   * may be passed to `$d` at most once per run; a repeated call throws.
    * @param setVersion A callback that receives the version of the written
-   * content after a successful run. Callbacks of all `$d` calls on the same
-   * object are invoked.
+   * content after a successful run.
    * @returns The write-only destination handle.
    */
   $d<T extends object>(
@@ -1076,7 +1078,6 @@ export type Plan = {
 class InternalPlan {
   context: Context;
   plan: Plan;
-  state: PlanState;
   inputCache: WeakMap<object, UntypedHandle>;
   outputCache: WeakMap<object, UntypedHandle>;
 
@@ -1097,25 +1098,13 @@ class InternalPlan {
     Invocation
   >();
 
-  /**
-   * Whether any $s/$d call supplied a version or a setVersion callback.
-   * Unversioned plans never consult or mutate the context's graph.
-   */
-  usesVersions = false;
-
   constructor(context: Context) {
     this.context = context;
     this.plan = undefined!;
-    this.state = "initial";
     this.inputCache = new WeakMap();
     this.outputCache = new WeakMap();
   }
 }
-
-/**
- * An internal type to represent the state of a plan.
- */
-type PlanState = "initial" | "planning" | "running" | "done" | "error";
 /**
  * An internal union type of data slots.
  */
@@ -1154,7 +1143,7 @@ type DestinationSlot = {
   body: unknown;
   dataID: DataID;
   version: Version | undefined;
-  setVersions: SetVersionFn[];
+  setVersion: SetVersionFn | undefined;
   // The version of the content the destination holds after the run,
   // calculated by the incremental pass.
   resolvedVersion: Version | undefined;
@@ -1178,9 +1167,6 @@ function source<T extends object>(
   if (version != null && (!Number.isInteger(version) || version < 0)) {
     throw new PreconditionError("version must be a non-negative integer");
   }
-  if (version != null) {
-    internalPlan.usesVersions = true;
-  }
 
   const cached = internalPlan.inputCache.get(value);
   if (cached) {
@@ -1188,17 +1174,11 @@ function source<T extends object>(
     if (dataSlot == null || dataSlot.type !== "source") {
       throw new LogicError(`dataSlot not found for handle: ${cached}`);
     }
-    // Reconcile the version claims of repeated $s calls on the same object:
-    // two different versions are contradictory claims, and a versioned call
-    // mixed with an unversioned one falls back to unversioned (treated as
-    // changed every run), which can only cause a re-run, never a wrong skip.
+    // Two different versions for a single object are contradictory.
     if (dataSlot.version !== version) {
-      if (dataSlot.version != null && version != null) {
-        throw new PreconditionError(
-          "the value is already specified as input with a different version",
-        );
-      }
-      dataSlot.version = undefined;
+      throw new PreconditionError(
+        "the value is already specified as input with a different version",
+      );
     }
     return cached as Handle<T>;
   }
@@ -1239,34 +1219,13 @@ function destination<T extends object>(
   if (version != null && (!Number.isInteger(version) || version < 0)) {
     throw new PreconditionError("version must be a non-negative integer");
   }
-  if (version != null || setVersion != null) {
-    internalPlan.usesVersions = true;
-  }
 
-  const cached = internalPlan.outputCache.get(value);
-  if (cached) {
-    const dataSlot = internalPlan.dataSlots.get(cached[handleIdKey]);
-    if (dataSlot == null || dataSlot.type !== "destination") {
-      throw new LogicError(`dataSlot not found for handle: ${cached}`);
-    }
-    // Reconcile the version claims of repeated $d calls on the same object:
-    // two different versions are contradictory claims, and a versioned call
-    // mixed with an unversioned one falls back to unversioned (treated as
-    // unknown content), which can only cause a re-run, never a wrong skip.
-    if (dataSlot.version !== version) {
-      if (dataSlot.version != null && version != null) {
-        throw new PreconditionError(
-          "the value is already specified as output with a different version",
-        );
-      }
-      dataSlot.version = undefined;
-    }
-    if (setVersion != null) {
-      dataSlot.setVersions.push(setVersion);
-    }
-    return cached as Handle<T>;
+  // Aliasing is not allowed for destinations
+  if (internalPlan.outputCache.has(value)) {
+    throw new PreconditionError(
+      "the value is already specified as another output",
+    );
   }
-
   if (internalPlan.inputCache.has(value)) {
     throw new PreconditionError("the value is already specified as input");
   }
@@ -1278,7 +1237,7 @@ function destination<T extends object>(
     body: value,
     dataID: plan.context[graphKey].resolveDataID(value),
     version,
-    setVersions: setVersion == null ? [] : [setVersion],
+    setVersion,
     resolvedVersion: undefined,
   });
   internalPlan.outputCache.set(value, handle);
@@ -1323,40 +1282,27 @@ function intermediate<T>(
 async function runPlan(
   plan: Plan,
 ): Promise<void> {
-  if (plan[internalPlanKey].state !== "initial") {
-    throw new PreconditionError(
-      `invalid state precondition for run(): ${plan[internalPlanKey].state}`,
-    );
-  }
-
-  // Versioned runs mutate the context's shared graph while invocation bodies
-  // run asynchronously; an overlap would silently corrupt the recorded
-  // versions, so it is rejected instead.
+  // A run mutates the context's shared graph while invocation bodies run
+  // asynchronously; an overlap would silently corrupt the recorded versions,
+  // so it is rejected instead.
   const context = plan.context;
-  const versioned = plan[internalPlanKey].usesVersions;
-  if (versioned) {
-    if (context[versionedRunKey]) {
-      throw new PreconditionError(
-        "versioned runs on a context must not overlap",
-      );
-    }
-    context[versionedRunKey] = true;
+  if (context[stateKey] !== "idle") {
+    throw new PreconditionError("runs on a context must not overlap");
   }
+  context[stateKey] = "planning";
 
   const invocationErrors: unknown[] = [];
   const erroredInvocations = new Set<InvocationID>();
   let cleanupError: unknown | undefined;
   let pruneResult: PruneResult = null;
   try {
-    plan[internalPlanKey].state = "planning";
-
     pruneResult = pruneUpToDateInvocations(plan);
 
     const runningInvocations = new Set<InvocationID>();
     const freeInvocations = prepareInvocations(plan);
     prepareDataSlots(plan);
 
-    plan[internalPlanKey].state = "running";
+    context[stateKey] = "running";
 
     // condvar is for runningInvocations and freeInvocations
     let { promise: condvar, resolve: notify } = Promise.withResolvers<void>();
@@ -1420,8 +1366,6 @@ async function runPlan(
 
     pruneResult?.graphRun.commit();
     notifyDestinationVersions(plan);
-
-    plan[internalPlanKey].state = "done";
   } finally {
     try {
       ensureAllIntermediateSlotsFreed(plan);
@@ -1429,13 +1373,7 @@ async function runPlan(
       cleanupError = error;
     }
 
-    if (plan[internalPlanKey].state !== "done") {
-      plan[internalPlanKey].state = "error";
-    }
-
-    if (versioned) {
-      context[versionedRunKey] = false;
-    }
+    context[stateKey] = "idle";
   }
 
   if (cleanupError !== undefined && invocationErrors.length === 0) {
@@ -1595,12 +1533,12 @@ type PruneResult = {
  * invocations.
  * @param plan The plan to prune.
  * @returns The graph session and per-invocation drafts, or null when the
- * plan is unversioned and the graph was not consulted.
+ * plan has no invocations and the graph was not consulted.
  */
 function pruneUpToDateInvocations(plan: Plan): PruneResult {
   const internalPlan = plan[internalPlanKey];
   const invocations = internalPlan.invocations;
-  if (!internalPlan.usesVersions || invocations.size === 0) {
+  if (invocations.size === 0) {
     return null;
   }
 
@@ -1675,7 +1613,7 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
           inputIDs.push(dataSlot.dataID);
           inputVersions.push(
             dataSlot.version != null
-              ? toSourceDataVersion(dataSlot.version)
+              ? versionToSourceDataVersion(dataSlot.version)
               : alwaysChangedDataVersion,
           );
           break;
@@ -1864,17 +1802,16 @@ function notifyDestinationVersions(plan: Plan): void {
       continue;
     }
     const resolvedVersion = dataSlot.resolvedVersion;
-    if (resolvedVersion == null) {
+    const setVersion = dataSlot.setVersion;
+    if (resolvedVersion == null || setVersion == null) {
       continue;
     }
-    for (const setVersion of dataSlot.setVersions) {
-      // A throwing user callback must not fail the run nor starve the
-      // remaining destinations of their versions.
-      try {
-        setVersion(resolvedVersion);
-      } catch (e: unknown) {
-        reportError(e);
-      }
+
+    // A throwing user callback must not fail the run.
+    try {
+      setVersion(resolvedVersion);
+    } catch (e: unknown) {
+      reportError(e);
     }
   }
 }

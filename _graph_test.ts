@@ -6,10 +6,10 @@ import {
   generateProcID,
   Graph,
   type InvocationDraft,
-  toSourceDataVersion,
   unknownDataVersion,
   unresolvedIntermediateDataID,
   unresolvedIntermediateDataVersion,
+  versionToSourceDataVersion,
 } from "./_graph.ts";
 
 Deno.test(function resolveDataIDIdentity() {
@@ -36,9 +36,9 @@ Deno.test(function sourceVersionsAreDisjointFromGeneratedVersions() {
   assertEquals(run2.version % 2, 0);
   assertNotEquals(run1.version, run2.version);
 
-  assertEquals(toSourceDataVersion(0) % 2, 1);
-  assertEquals(toSourceDataVersion(1) % 2, 1);
-  assertNotEquals(toSourceDataVersion(1), toSourceDataVersion(2));
+  assertEquals(versionToSourceDataVersion(0) % 2, 1);
+  assertEquals(versionToSourceDataVersion(1) % 2, 1);
+  assertNotEquals(versionToSourceDataVersion(1), versionToSourceDataVersion(2));
 });
 
 Deno.test(function missAssignsIDsAndVersions() {
@@ -51,7 +51,7 @@ Deno.test(function missAssignsIDsAndVersions() {
   const draft: InvocationDraft = {
     procID,
     inputIDs: [sourceID],
-    inputVersions: [toSourceDataVersion(1)],
+    inputVersions: [versionToSourceDataVersion(1)],
     outputIDs: [unresolvedIntermediateDataID],
     outputVersions: [unresolvedIntermediateDataVersion],
     providerIDs: [providerID],
@@ -71,7 +71,7 @@ Deno.test(function identicalResubmissionIsUnchangedAfterCommit() {
   const draft: InvocationDraft = {
     procID,
     inputIDs: [sourceID],
-    inputVersions: [toSourceDataVersion(1)],
+    inputVersions: [versionToSourceDataVersion(1)],
     outputIDs: [unresolvedIntermediateDataID],
     outputVersions: [unresolvedIntermediateDataVersion],
     providerIDs: [providerID],
@@ -97,7 +97,7 @@ Deno.test(function uncommittedResolutionLeavesNoRecord() {
   const draft: InvocationDraft = {
     procID,
     inputIDs: [sourceID],
-    inputVersions: [toSourceDataVersion(1)],
+    inputVersions: [versionToSourceDataVersion(1)],
     outputIDs: [unresolvedIntermediateDataID],
     outputVersions: [unresolvedIntermediateDataVersion],
     providerIDs: [providerID],
@@ -122,7 +122,7 @@ Deno.test(function duplicateResolutionsInOneRunBothMiss() {
   const draft: InvocationDraft = {
     procID,
     inputIDs: [sourceID],
-    inputVersions: [toSourceDataVersion(1)],
+    inputVersions: [versionToSourceDataVersion(1)],
     outputIDs: [unresolvedIntermediateDataID],
     outputVersions: [unresolvedIntermediateDataVersion],
     providerIDs: [providerID],
@@ -147,7 +147,7 @@ Deno.test(function inputVersionBumpChangesThenConverges() {
   const draftWithVersion = (version: number): InvocationDraft => ({
     procID,
     inputIDs: [sourceID],
-    inputVersions: [toSourceDataVersion(version)],
+    inputVersions: [versionToSourceDataVersion(version)],
     outputIDs: [unresolvedIntermediateDataID],
     outputVersions: [unresolvedIntermediateDataVersion],
     providerIDs: [providerID],
@@ -186,7 +186,7 @@ Deno.test(function destinationVersionRoundTrip() {
   ): InvocationDraft => ({
     procID,
     inputIDs: [sourceID],
-    inputVersions: [toSourceDataVersion(inputVersion)],
+    inputVersions: [versionToSourceDataVersion(inputVersion)],
     outputIDs: [destinationID],
     outputVersions: [outputVersion],
     providerIDs: [unresolvedIntermediateDataID],
@@ -260,7 +260,7 @@ Deno.test(function distinctSignaturesAreIndependent() {
   const draftWithProc = (id: typeof procID): InvocationDraft => ({
     procID: id,
     inputIDs: [sourceID],
-    inputVersions: [toSourceDataVersion(1)],
+    inputVersions: [versionToSourceDataVersion(1)],
     outputIDs: [unresolvedIntermediateDataID],
     outputVersions: [unresolvedIntermediateDataVersion],
     providerIDs: [providerID],
@@ -283,7 +283,7 @@ Deno.test(function distinctProvidersAreIndependent() {
   const draftWithProvider = (providerID: DataID): InvocationDraft => ({
     procID,
     inputIDs: [sourceID],
-    inputVersions: [toSourceDataVersion(1)],
+    inputVersions: [versionToSourceDataVersion(1)],
     outputIDs: [unresolvedIntermediateDataID],
     outputVersions: [unresolvedIntermediateDataVersion],
     providerIDs: [providerID],
@@ -310,7 +310,7 @@ Deno.test(function invalidateDropsTheRecord() {
   const draft = (outputVersion: DataVersion): InvocationDraft => ({
     procID,
     inputIDs: [sourceID],
-    inputVersions: [toSourceDataVersion(1)],
+    inputVersions: [versionToSourceDataVersion(1)],
     outputIDs: [destinationID],
     outputVersions: [outputVersion],
     providerIDs: [unresolvedIntermediateDataID],
@@ -339,7 +339,7 @@ Deno.test(function untouchedRecordsAreEventuallyEvicted() {
   const draft: InvocationDraft = {
     procID,
     inputIDs: [sourceID],
-    inputVersions: [toSourceDataVersion(1)],
+    inputVersions: [versionToSourceDataVersion(1)],
     outputIDs: [unresolvedIntermediateDataID],
     outputVersions: [unresolvedIntermediateDataVersion],
     providerIDs: [providerID],

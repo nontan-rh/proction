@@ -616,32 +616,37 @@ Deno.test(async function conflictingSourceVersionsThrow() {
   testPool.assertNoError();
 });
 
-Deno.test(async function unversionedSourceClaimWinsOverVersioned() {
-  // A versioned $s mixed with an unversioned $s on the same object falls
-  // back to unversioned: the consumer re-runs every time instead of trusting
-  // the stale claim.
+Deno.test(async function mixedVersionedAndUnversionedSourceClaimsThrow() {
+  // A versioned $s mixed with an unversioned $s on the same object is a
+  // contradictory claim, just like two conflicting versions.
   const testPool = createBoxedNumberTestPool();
-  const { add, getCount } = createCountingAdd(testPool);
+  const { add } = createCountingAdd(testPool);
 
   const ctx = new Context(contextOptions);
   const a = Box.withValue(1);
-  const out = new Box<number>();
-  const tracker = createVersionTracker();
 
-  const doRun = () =>
-    run(ctx, ({ $s, $d }) => {
-      add($d(out, tracker.version, tracker.setVersion), $s(a, 1), $s(a));
-    });
-
-  await doRun();
-  assertEquals(getCount(), 1);
-  await doRun();
-  assertEquals(getCount(), 2);
-  assertEquals(out.value, 2);
+  await assertRejects(
+    () =>
+      run(ctx, ({ $s, $d }) => {
+        add($d(new Box<number>()), $s(a, 1), $s(a));
+      }),
+    Error,
+    "different version",
+  );
+  await assertRejects(
+    () =>
+      run(ctx, ({ $s, $d }) => {
+        add($d(new Box<number>()), $s(a), $s(a, 1));
+      }),
+    Error,
+    "different version",
+  );
   testPool.assertNoError();
 });
 
-Deno.test(async function repeatedDestinationCallbacksAllFire() {
+Deno.test(async function repeatedDestinationCallsThrow() {
+  // Aliasing destinations is not allowed: each object may be passed to $d
+  // at most once per run.
   const testPool = createBoxedNumberTestPool();
   const { add } = createCountingAdd(testPool);
 
@@ -649,19 +654,17 @@ Deno.test(async function repeatedDestinationCallbacksAllFire() {
   const a = Box.withValue(1);
   const b = Box.withValue(2);
   const out = new Box<number>();
-  const tracker1 = createVersionTracker();
-  const tracker2 = createVersionTracker();
 
-  await run(ctx, ({ $s, $d }) => {
-    const handle = $d(out, undefined, tracker1.setVersion);
-    $d(out, undefined, tracker2.setVersion);
-    add(handle, $s(a, 1), $s(b, 1));
-  });
-
-  assertEquals(out.value, 3);
-  assertEquals(tracker1.calls, 1);
-  assertEquals(tracker2.calls, 1);
-  assertEquals(tracker1.version, tracker2.version);
+  await assertRejects(
+    () =>
+      run(ctx, ({ $s, $d }) => {
+        const handle = $d(out);
+        $d(out);
+        add(handle, $s(a, 1), $s(b, 1));
+      }),
+    Error,
+    "already specified as another output",
+  );
   testPool.assertNoError();
 });
 
@@ -689,7 +692,7 @@ Deno.test(async function invalidVersionsAreRejected() {
   }
 });
 
-Deno.test(async function overlappingVersionedRunsAreRejected() {
+Deno.test(async function overlappingRunsAreRejected() {
   const testPool = createBoxedNumberTestPool();
   const { add, getCount } = createCountingAdd(testPool);
 
@@ -699,18 +702,26 @@ Deno.test(async function overlappingVersionedRunsAreRejected() {
   const out = new Box<number>();
   const tracker = createVersionTracker();
 
-  const doRun = () =>
+  const versionedRun = () =>
     run(ctx, ({ $s, $d }) => {
       add($d(out, tracker.version, tracker.setVersion), $s(a, 1), $s(b, 1));
     });
+  // Unversioned runs mutate the context's shared graph too, so they must
+  // not overlap either.
+  const unversionedRun = () =>
+    run(ctx, ({ $s, $d }) => {
+      add($d(new Box<number>()), $s(a), $s(b));
+    });
 
-  const inFlight = doRun();
-  await assertRejects(doRun, Error, "must not overlap");
+  const inFlight = versionedRun();
+  await assertRejects(versionedRun, Error, "must not overlap");
+  await assertRejects(unversionedRun, Error, "must not overlap");
   await inFlight;
   assertEquals(getCount(), 1);
 
-  // After the in-flight run finished, versioned runs are accepted again.
-  await doRun();
+  // A rejected overlap does not disturb the in-flight run's records: the
+  // context accepts runs again and the identical resubmission is skipped.
+  await versionedRun();
   assertEquals(getCount(), 1);
   testPool.assertNoError();
 });
