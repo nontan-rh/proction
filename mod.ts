@@ -617,13 +617,13 @@ export function procNIAll<
     ...{ [key in keyof I]: Handle<I[key]> },
   ] // expanded for readability of inferred type
 ) => void {
+  const procID = generateProcID();
   const middlewares = procOptions?.middlewares ?? [];
 
   const g = (
     outputs: MappedHandleType<IO>,
     ...restInputs: [...MappedHandleType<IO>, ...MappedHandleType<I>]
   ) => {
-    const procID = generateProcID();
     const plan = getPlan(outputs, ...restInputs);
 
     const ioLength = outputs.length;
