@@ -1420,7 +1420,7 @@ Deno.test(function types() {
       _d: Box<bigint>,
     ) {},
   );
-  procNIAll(
+  procNIAll<[Box<number>, Box<string>], []>(
     function moiAllOutOfPlace(
       [_x, _y]: [Box<number>, Box<string>],
       _a: Box<number>,
