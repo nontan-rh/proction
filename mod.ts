@@ -1281,50 +1281,88 @@ function prepareInvocations(
 ): Invocation[] {
   const freeInvocations: Invocation[] = [];
 
-  const outputToInvocation = new Map<HandleId, Invocation>();
-  for (const invocation of plan[internalPlanKey].invocations.values()) {
-    for (const output of invocation.outputs) {
-      if (outputToInvocation.has(output[handleIdKey])) {
-        throw new LogicError(
-          "the output have two parent invocations",
-        );
-      }
-      outputToInvocation.set(output[handleIdKey], invocation);
-    }
-  }
+  const invocations = plan[internalPlanKey].invocations;
+  const { producerByHandle, consumersByHandle, blockerCounts } =
+    buildDependencyMaps(invocations);
 
-  for (const invocation of plan[internalPlanKey].invocations.values()) {
+  for (const invocation of invocations.values()) {
     for (const input of invocation.inputs) {
-      const parentInvocation = outputToInvocation.get(input[handleIdKey]);
+      const parentInvocation = producerByHandle.get(input[handleIdKey]);
       if (parentInvocation == null) {
         continue;
       }
       // Input of the invocation depends on its parent invocation
 
       parentInvocation.next.push(invocation); // allow duplication for proper counting
-      invocation.numBlockers++;
     }
+    invocation.numBlockers = blockerCounts.get(invocation.id)!;
   }
 
   const inputConsumerCounts = new Map<HandleId, number>();
   const resolveContext: ResolveContext = { plan, inputConsumerCounts };
-  for (const invocation of plan[internalPlanKey].invocations.values()) {
-    for (const input of invocation.inputs) {
-      const id = input[handleIdKey];
-      inputConsumerCounts.set(id, (inputConsumerCounts.get(id) ?? 0) + 1);
-    }
+  for (const [id, consumers] of consumersByHandle) {
+    inputConsumerCounts.set(id, consumers.length);
   }
-  for (const invocation of plan[internalPlanKey].invocations.values()) {
+  for (const invocation of invocations.values()) {
     invocation.body = invocation.resolveBody(resolveContext);
   }
 
-  for (const invocation of plan[internalPlanKey].invocations.values()) {
+  for (const invocation of invocations.values()) {
     if (invocation.numBlockers === 0) {
       freeInvocations.push(invocation);
     }
   }
 
   return freeInvocations;
+}
+
+/**
+ * An internal function to derive the dependency structure of a plan's
+ * invocations, with one edge per input reference.
+ * @param invocations The invocations of the plan.
+ * @returns The producer of each handle, the consumers of each handle (once
+ * per input reference), and the number of in-plan blockers per invocation.
+ */
+function buildDependencyMaps(
+  invocations: Map<InvocationID, Invocation>,
+): {
+  producerByHandle: Map<HandleId, Invocation>;
+  consumersByHandle: Map<HandleId, Invocation[]>;
+  blockerCounts: Map<InvocationID, number>;
+} {
+  const producerByHandle = new Map<HandleId, Invocation>();
+  for (const invocation of invocations.values()) {
+    for (const output of invocation.outputs) {
+      const id = output[handleIdKey];
+      if (producerByHandle.has(id)) {
+        throw new LogicError(
+          "the output have two parent invocations",
+        );
+      }
+      producerByHandle.set(id, invocation);
+    }
+  }
+
+  const consumersByHandle = new Map<HandleId, Invocation[]>();
+  const blockerCounts = new Map<InvocationID, number>();
+  for (const invocation of invocations.values()) {
+    let numBlockers = 0;
+    for (const input of invocation.inputs) {
+      const id = input[handleIdKey];
+      if (producerByHandle.has(id)) {
+        numBlockers++;
+      }
+      let consumers = consumersByHandle.get(id);
+      if (consumers == null) {
+        consumers = [];
+        consumersByHandle.set(id, consumers);
+      }
+      consumers.push(invocation);
+    }
+    blockerCounts.set(invocation.id, numBlockers);
+  }
+
+  return { producerByHandle, consumersByHandle, blockerCounts };
 }
 
 /**
