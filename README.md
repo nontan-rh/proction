@@ -12,6 +12,7 @@ Proction is a utility library for versatile dataflow-based tasks that provides:
 - Good integration with externally managed resources
 - Type-agnostic data handling beyond numeric vectors/tensors
 - Highly customizable scheduling and parallelism
+- Incremental calculation across repeated runs
 
 Each feature is provided in a modular, customizable way, and you can combine
 them as you like.

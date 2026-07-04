@@ -331,7 +331,7 @@ Deno.test(function invalidateDropsTheRecord() {
   assertEquals(third.unchanged, false);
 });
 
-Deno.test(function untouchedRecordsAreEventuallyEvicted() {
+Deno.test(function commitEvictsRecordsTheRunDidNotResolve() {
   const graph = new Graph();
   const procID = generateProcID();
   const sourceID = graph.resolveDataID({});
@@ -349,14 +349,70 @@ Deno.test(function untouchedRecordsAreEventuallyEvicted() {
   const first = run1.resolve(draft);
   run1.commit();
 
-  // Many runs pass without touching the record.
-  for (let i = 0; i < 320; i++) {
-    graph.beginRun();
-  }
+  // A committed run that does not resolve the invocation drops its record.
+  const run2 = graph.beginRun();
+  run2.commit();
 
   // The record was evicted: the invocation re-executes (never a wrong skip).
+  const run3 = graph.beginRun();
+  const third = run3.resolve(draft);
+  assertEquals(third.unchanged, false);
+  assertNotEquals(third.outputIDs, first.outputIDs);
+});
+
+Deno.test(function uncommittedRunEvictsNothing() {
+  const graph = new Graph();
+  const procID = generateProcID();
+  const sourceID = graph.resolveDataID({});
+  const providerID = graph.resolveDataID(() => {});
+  const draft: InvocationDraft = {
+    procID,
+    inputIDs: [sourceID],
+    inputVersions: [versionToSourceDataVersion(1)],
+    outputIDs: [unresolvedIntermediateDataID],
+    outputVersions: [unresolvedIntermediateDataVersion],
+    providerIDs: [providerID],
+  };
+
+  const run1 = graph.beginRun();
+  const first = run1.resolve(draft);
+  run1.commit();
+
+  // A failed run never commits and leaves the committed records as they are.
+  graph.beginRun();
+
+  const run3 = graph.beginRun();
+  const third = run3.resolve(draft);
+  assertEquals(third.unchanged, true);
+  assertEquals(third.outputIDs, first.outputIDs);
+});
+
+Deno.test(function unchangedResolutionCarriesTheRecordOverCommit() {
+  const graph = new Graph();
+  const procID = generateProcID();
+  const sourceID = graph.resolveDataID({});
+  const providerID = graph.resolveDataID(() => {});
+  const draft: InvocationDraft = {
+    procID,
+    inputIDs: [sourceID],
+    inputVersions: [versionToSourceDataVersion(1)],
+    outputIDs: [unresolvedIntermediateDataID],
+    outputVersions: [unresolvedIntermediateDataVersion],
+    providerIDs: [providerID],
+  };
+
+  const run1 = graph.beginRun();
+  const first = run1.resolve(draft);
+  run1.commit();
+
+  // An unchanged resolution keeps the record alive across the commit.
   const run2 = graph.beginRun();
   const second = run2.resolve(draft);
-  assertEquals(second.unchanged, false);
-  assertNotEquals(second.outputIDs, first.outputIDs);
+  assertEquals(second.unchanged, true);
+  run2.commit();
+
+  const run3 = graph.beginRun();
+  const third = run3.resolve(draft);
+  assertEquals(third.unchanged, true);
+  assertEquals(third.outputIDs, first.outputIDs);
 });

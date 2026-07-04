@@ -518,10 +518,14 @@ Deno.test(async function swappedDestinationReruns() {
   assertEquals(getCount(), 2);
   assertEquals(out2.value, 3);
 
+  // Only the records of the last run are retained, so switching back to the
+  // first destination re-executes.
   await doRun(out1, tracker1);
-  assertEquals(getCount(), 2);
-  await doRun(out2, tracker2);
-  assertEquals(getCount(), 2);
+  assertEquals(getCount(), 3);
+
+  // An identical resubmission is skipped.
+  await doRun(out1, tracker1);
+  assertEquals(getCount(), 3);
   testPool.assertNoError();
 });
 

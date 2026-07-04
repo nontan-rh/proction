@@ -77,17 +77,6 @@ export class HashTable<K, V> {
   }
 
   /**
-   * Iterates all entries of the table in no particular order.
-   */
-  *entries(): IterableIterator<[K, V]> {
-    for (const assoc of this.#table.values()) {
-      for (let i = 0; i < assoc.length; i++) {
-        yield [assoc[i][0], assoc[i][1]];
-      }
-    }
-  }
-
-  /**
    * Deletes the entry for a key equal to `key`.
    */
   delete(key: K): boolean {
