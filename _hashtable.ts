@@ -20,25 +20,6 @@ export class HashTable<K, V> {
   }
 
   /**
-   * Checks whether the table contains a key equal to `key`.
-   */
-  has(key: K): boolean {
-    const hash = (this.#hash)(key);
-    const assoc = this.#table.get(hash);
-    if (assoc == null) {
-      return false;
-    }
-
-    for (let i = 0; i < assoc.length; i++) {
-      if ((this.#equals)(key, assoc[i][0])) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  /**
    * Gets the value associated with a key equal to `key`.
    */
   get(key: K): V | undefined {

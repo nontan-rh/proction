@@ -9,6 +9,12 @@ export {
 } from "./pipebox.ts";
 export { Pool } from "./pool.ts";
 export {
+  contextOptions,
+  createBoxedNumberTestPool,
+  createTestPool,
+  type TestPool,
+} from "./testpool.ts";
+export {
   assertIsChildTypeOf,
   type ChildType,
   type ParentType,

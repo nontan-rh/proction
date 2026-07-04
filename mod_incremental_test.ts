@@ -1,70 +1,25 @@
 import {
   assert,
   assertEquals,
-  assertFalse,
-  assertGreaterOrEqual,
   assertNotEquals,
   assertRejects,
 } from "@std/assert";
 import {
   Context,
-  type ContextOptions,
   proc,
   procI,
   procN,
-  type ProvideFn,
-  provider,
   run,
   type SetVersionFn,
   toFunc,
   type Version,
 } from "./mod.ts";
-import { Pool } from "./_testutils/pool.ts";
 import { Box } from "./_testutils/box.ts";
-
-const contextOptions: Partial<ContextOptions> = {
-  reportError: console.error,
-  assertNoLeak: true,
-};
-
-type TestPool<T, Args extends readonly unknown[]> = {
-  provide: ProvideFn<T, Args>;
-  assertNoError(): void;
-};
-
-function createTestPool<T, Args extends readonly unknown[]>(
-  create: (...args: Args) => T,
-  cleanup: (x: T) => void,
-): TestPool<T, Args> {
-  let errorReported = false;
-
-  const pool = new Pool<T, Args>(
-    create,
-    cleanup,
-    (e) => {
-      errorReported = true;
-      console.error(e);
-    },
-  );
-  const provide = provider(
-    (...args: Args) => pool.acquire(...args),
-    (x) => pool.release(x),
-  );
-
-  return {
-    provide,
-    assertNoError() {
-      assertEquals(pool.acquiredCount, 0);
-      assertGreaterOrEqual(pool.pooledCount, 0);
-      assertEquals(pool.taintedCount, 0);
-      assertFalse(errorReported);
-    },
-  };
-}
-
-function createBoxedNumberTestPool(): TestPool<Box<number>, []> {
-  return createTestPool(() => new Box<number>(), (x) => x.clear());
-}
+import {
+  contextOptions,
+  createBoxedNumberTestPool,
+  type TestPool,
+} from "./_testutils/testpool.ts";
 
 type VersionTracker = {
   version: Version | undefined;
@@ -353,7 +308,7 @@ Deno.test(async function procNWithMixedDestinations() {
   testPool.assertNoError();
 });
 
-Deno.test(async function inPlaceInteractsWithPruning() {
+Deno.test(async function variantSelectionIsPruneIndependent() {
   const testPool = createBoxedNumberTestPool();
   const producer = createCountingAdd(testPool);
   const sibling = createCountingAdd(testPool);
@@ -413,13 +368,16 @@ Deno.test(async function inPlaceInteractsWithPruning() {
   assertEquals(final.getCount(), 1);
   testPool.assertNoError();
 
-  // Invalidate out1 only. The sibling consumer is skipped, so the surviving
-  // consumer becomes the single consumer of the intermediate and the
-  // in-place variant is chosen.
+  // Invalidate out1 only. The sibling consumer is skipped, so only the
+  // surviving consumer still reads the intermediate at execution time.
+  // Variant selection must nevertheless stay out-of-place: it depends only
+  // on the wiring as submitted, because a variant flip could change the
+  // produced content (e.g. through the shape of the output buffer) while
+  // the graph carries the recorded versions over.
   out1.value = -1;
   tracker1.version = v(0);
   await doRun();
-  assertEquals(variantsUsed, ["out-of-place", "in-place"]);
+  assertEquals(variantsUsed, ["out-of-place", "out-of-place"]);
   assertEquals(producer.getCount(), 2);
   assertEquals(sibling.getCount(), 1);
   assertEquals(final.getCount(), 2);
@@ -694,6 +652,28 @@ Deno.test(async function invalidVersionsAreRejected() {
       "non-negative integer",
     );
   }
+
+  // From 2^52 on, the version mapping loses precision, so distinct versions
+  // would collide and could even land in the generated namespace.
+  await assertRejects(
+    () =>
+      run(ctx, ({ $s }) => {
+        $s(a, 2 ** 52);
+      }),
+    Error,
+    "less than 2^52",
+  );
+
+  // Generated versions are even, so an odd claim cannot come from
+  // setVersion and could alias a caller-managed source version.
+  await assertRejects(
+    () =>
+      run(ctx, ({ $d }) => {
+        $d(a, 3 as Version);
+      }),
+    Error,
+    "reported via setVersion",
+  );
 });
 
 Deno.test(async function overlappingRunsAreRejected() {
@@ -906,5 +886,108 @@ Deno.test(async function sourceVersionCannotCollideWithGeneratedVersion() {
   });
   assertEquals(reader.getCount(), 2);
   assertEquals(out.value, 110);
+  testPool.assertNoError();
+});
+
+Deno.test(async function failedRunInvalidatesExecutedInvocations() {
+  // An invocation that executes successfully within a failed run has
+  // overwritten its destination, while the caller's stored claim is never
+  // updated because setVersion fires only on success. Its committed record
+  // must be dropped so that a resubmission whose versions match the stale
+  // record re-executes instead of trusting it.
+  const testPool = createBoxedNumberTestPool();
+  const { add, getCount } = createCountingAdd(testPool);
+  let shouldThrow = false;
+  const failing = proc(function failingBody(out: Box<number>, x: Box<number>) {
+    if (shouldThrow) {
+      throw new Error("failure requested");
+    }
+    out.value = x.value;
+  });
+
+  const ctx = new Context(contextOptions);
+  const a = Box.withValue(1);
+  const b = Box.withValue(2);
+  const c = Box.withValue(7);
+  const out = new Box<number>();
+  const outFail = new Box<number>();
+  const tracker = createVersionTracker();
+  let aVersion = 1;
+
+  const doRun = () =>
+    run(ctx, ({ $s, $d }) => {
+      add(
+        $d(out, tracker.version, tracker.setVersion),
+        $s(a, v(aVersion)),
+        $s(b, v(1)),
+      );
+      failing($d(outFail), $s(c, v(1)));
+    });
+
+  await doRun();
+  assertEquals(out.value, 3);
+  assertEquals(getCount(), 1);
+  assertEquals(tracker.calls, 1);
+
+  // The sibling fails while add succeeds and overwrites out.
+  a.value = 100;
+  aVersion = 2;
+  shouldThrow = true;
+  await assertRejects(doRun, Error, "failure requested");
+  assertEquals(getCount(), 2);
+  assertEquals(out.value, 102);
+  assertEquals(tracker.calls, 1);
+
+  // The caller reverts a to its version-1 content (versions are compared
+  // only for equality, so going back to a previous version is legal). The
+  // stale record must not be trusted: add re-executes and repairs out.
+  a.value = 1;
+  aVersion = 1;
+  shouldThrow = false;
+  await doRun();
+  assertEquals(getCount(), 3);
+  assertEquals(out.value, 3);
+  assertEquals(tracker.calls, 2);
+  testPool.assertNoError();
+});
+
+Deno.test(async function unversionedRunEvictsCommittedRecords() {
+  // A fully unversioned run skips the incremental pass, but it may still
+  // overwrite destinations that committed records describe, so it evicts
+  // them: the versioned resubmission afterwards must re-execute.
+  const testPool = createBoxedNumberTestPool();
+  const versioned = createCountingAdd(testPool);
+  const unversioned = createCountingAdd(testPool);
+
+  const ctx = new Context(contextOptions);
+  const a = Box.withValue(1);
+  const b = Box.withValue(2);
+  const c = Box.withValue(100);
+  const out = new Box<number>();
+  const tracker = createVersionTracker();
+
+  const versionedRun = () =>
+    run(ctx, ({ $s, $d }) => {
+      versioned.add(
+        $d(out, tracker.version, tracker.setVersion),
+        $s(a, v(1)),
+        $s(b, v(1)),
+      );
+    });
+
+  await versionedRun();
+  assertEquals(out.value, 3);
+  assertEquals(versioned.getCount(), 1);
+
+  // Overwrites out without telling the graph anything.
+  await run(ctx, ({ $s, $d }) => {
+    unversioned.add($d(out), $s(c), $s(b));
+  });
+  assertEquals(out.value, 102);
+  assertEquals(unversioned.getCount(), 1);
+
+  await versionedRun();
+  assertEquals(versioned.getCount(), 2);
+  assertEquals(out.value, 3);
   testPool.assertNoError();
 });

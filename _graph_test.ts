@@ -416,3 +416,30 @@ Deno.test(function unchangedResolutionCarriesTheRecordOverCommit() {
   assertEquals(third.unchanged, true);
   assertEquals(third.outputIDs, first.outputIDs);
 });
+
+Deno.test(function evictAllRecordsDropsCommittedRecords() {
+  const graph = new Graph();
+  const procID = generateProcID();
+  const sourceID = graph.resolveDataID({});
+  const providerID = graph.resolveDataID(() => {});
+  const draft: InvocationDraft = {
+    procID,
+    inputIDs: [sourceID],
+    inputVersions: [versionToSourceDataVersion(1)],
+    outputIDs: [unresolvedIntermediateDataID],
+    outputVersions: [unresolvedIntermediateDataVersion],
+    providerIDs: [providerID],
+  };
+
+  const run1 = graph.beginRun();
+  run1.resolve(draft);
+  run1.commit();
+
+  // A run that executed without resolving against the graph may have
+  // overwritten recorded content, so the records must not be trusted.
+  graph.evictAllRecords();
+
+  const run2 = graph.beginRun();
+  const second = run2.resolve(draft);
+  assertEquals(second.unchanged, false);
+});

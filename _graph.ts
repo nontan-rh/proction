@@ -7,7 +7,6 @@ import { fmix32, mixWord } from "./_murmurhash.ts";
 export type ProcID = Brand<number, "procID">;
 export type DataID = Brand<number, "dataID">;
 export type DataVersion = Brand<number, "dataVersion">;
-export type InvocationID = Brand<number, "invocationID">;
 
 export const generateProcID: () => ProcID = idGenerator((x: number) =>
   x as ProcID
@@ -51,6 +50,12 @@ export function versionToSourceDataVersion(version: number): DataVersion {
  * @param runIndex The run count.
  * @returns The version in the graph's namespace.
  */
+// FIXME: Generated versions are unique only within one Graph. When two
+// Contexts write the same destination object, both report plain runIndex*2
+// versions, so a claim stored from one Context can numerically match a
+// record of the other Context and cause a wrong "unchanged" skip. Sharing a
+// destination across Contexts is out of scope for now; salt the generated
+// namespace per Graph if it is ever supported.
 function runIndexToOutputDataVersion(runIndex: number): DataVersion {
   return (runIndex * 2) as DataVersion;
 }
@@ -123,49 +128,36 @@ export type InvocationSignature = {
 function hashInvocationSignature(x: InvocationSignature): number {
   let h = 0;
   h = mixWord(h, x.procID | 0);
-  for (const inputID of x.inputIDs) {
-    h = mixWord(h, inputID | 0);
-  }
-  for (const outputID of x.outputIDs) {
-    h = mixWord(h, outputID | 0);
-  }
-  for (const providerID of x.providerIDs) {
-    h = mixWord(h, providerID | 0);
-  }
+  h = mixIDArray(h, x.inputIDs);
+  h = mixIDArray(h, x.outputIDs);
+  h = mixIDArray(h, x.providerIDs);
   return fmix32(h);
+}
+
+function mixIDArray(h: number, ids: readonly DataID[]): number {
+  for (const id of ids) {
+    h = mixWord(h, id | 0);
+  }
+  return h;
 }
 
 function equalsInvocationSignature(
   l: InvocationSignature,
   r: InvocationSignature,
 ): boolean {
-  if (l.procID !== r.procID) {
+  return l.procID === r.procID &&
+    equalsIDArray(l.inputIDs, r.inputIDs) &&
+    equalsIDArray(l.outputIDs, r.outputIDs) &&
+    equalsIDArray(l.providerIDs, r.providerIDs);
+}
+
+function equalsIDArray(l: readonly DataID[], r: readonly DataID[]): boolean {
+  if (l.length !== r.length) {
     return false;
   }
 
-  if (l.inputIDs.length != r.inputIDs.length) {
-    return false;
-  }
-  for (let i = 0; i < l.inputIDs.length; i++) {
-    if (l.inputIDs[i] !== r.inputIDs[i]) {
-      return false;
-    }
-  }
-
-  if (l.outputIDs.length != r.outputIDs.length) {
-    return false;
-  }
-  for (let i = 0; i < l.outputIDs.length; i++) {
-    if (l.outputIDs[i] !== r.outputIDs[i]) {
-      return false;
-    }
-  }
-
-  if (l.providerIDs.length != r.providerIDs.length) {
-    return false;
-  }
-  for (let i = 0; i < l.providerIDs.length; i++) {
-    if (l.providerIDs[i] !== r.providerIDs[i]) {
+  for (let i = 0; i < l.length; i++) {
+    if (l[i] !== r[i]) {
       return false;
     }
   }
@@ -205,9 +197,6 @@ export type ResolvedInvocation = {
  * The record of the last resolution of an invocation signature.
  */
 type InvocationRecord = {
-  invocationID: InvocationID;
-  procID: ProcID;
-  inputIDs: readonly DataID[];
   inputVersions: readonly DataVersion[];
   outputIDs: readonly DataID[];
   outputVersions: readonly DataVersion[];
@@ -263,9 +252,6 @@ export class Graph {
       hashInvocationSignature,
       equalsInvocationSignature,
     );
-  #generateInvocationID: () => InvocationID = idGenerator((x: number) =>
-    x as InvocationID
-  );
 
   #currentDataVersion: DataVersion = 0 as DataVersion;
   #runIndex = 0;
@@ -307,6 +293,18 @@ export class Graph {
   }
 
   /**
+   * Drops all committed records. A run that executes without resolving
+   * against the graph may overwrite destination content that the records
+   * describe, so they must not be trusted afterwards.
+   */
+  evictAllRecords(): void {
+    this.#invocations = new HashTable(
+      hashInvocationSignature,
+      equalsInvocationSignature,
+    );
+  }
+
+  /**
    * Resolves the stable data ID of an external object or of a provide
    * function.
    * @param x The external object.
@@ -344,9 +342,6 @@ export class Graph {
       );
       const outputVersions = draft.outputVersions.map(() => version);
       pending.push([signature, {
-        invocationID: this.#generateInvocationID(),
-        procID: draft.procID,
-        inputIDs: signature.inputIDs,
         inputVersions: draft.inputVersions.slice(),
         outputIDs,
         outputVersions,
@@ -373,9 +368,6 @@ export class Graph {
 
     const outputVersions = cached.outputVersions.map(() => version);
     pending.push([signature, {
-      invocationID: cached.invocationID,
-      procID: cached.procID,
-      inputIDs: cached.inputIDs,
       inputVersions: draft.inputVersions.slice(),
       outputIDs: cached.outputIDs,
       outputVersions,

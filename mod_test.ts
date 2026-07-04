@@ -1,14 +1,7 @@
-import {
-  assertEquals,
-  assertFalse,
-  assertGreaterOrEqual,
-  assertRejects,
-  assertThrows,
-} from "@std/assert";
+import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { delay } from "@std/async";
 import {
   Context,
-  type ContextOptions,
   type DisposableWrap,
   type Handle,
   proc,
@@ -16,13 +9,10 @@ import {
   procN,
   procNI1,
   procNIAll,
-  type ProvideFn,
-  provider,
   run,
   toFunc,
   toFuncN,
 } from "./mod.ts";
-import { Pool } from "./_testutils/pool.ts";
 import { Box } from "./_testutils/box.ts";
 import {
   type IPipeBoxR,
@@ -33,50 +23,12 @@ import {
   pipeBoxRW,
 } from "./_testutils/pipebox.ts";
 import { assertIsChildTypeOf, testValue } from "./_testutils/types.ts";
-
-const contextOptions: Partial<ContextOptions> = {
-  reportError: console.error,
-  assertNoLeak: true,
-};
-
-type TestPool<T, Args extends readonly unknown[]> = {
-  provide: ProvideFn<T, Args>;
-  assertNoError(): void;
-};
-
-function createTestPool<T, Args extends readonly unknown[]>(
-  create: (...args: Args) => T,
-  cleanup: (x: T) => void,
-): TestPool<T, Args> {
-  let errorReported = false;
-
-  const pool = new Pool<T, Args>(
-    create,
-    cleanup,
-    (e) => {
-      errorReported = true;
-      console.error(e);
-    },
-  );
-  const provide = provider(
-    (...args: Args) => pool.acquire(...args),
-    (x) => pool.release(x),
-  );
-
-  return {
-    provide,
-    assertNoError() {
-      assertEquals(pool.acquiredCount, 0);
-      assertGreaterOrEqual(pool.pooledCount, 0);
-      assertEquals(pool.taintedCount, 0);
-      assertFalse(errorReported);
-    },
-  };
-}
-
-function createBoxedNumberTestPool(): TestPool<Box<number>, []> {
-  return createTestPool(() => new Box<number>(), (x) => x.clear());
-}
+import {
+  contextOptions,
+  createBoxedNumberTestPool,
+  createTestPool,
+  type TestPool,
+} from "./_testutils/testpool.ts";
 
 function createNumberArrayTestPool(): TestPool<number[], [number]> {
   return createTestPool((l) => new Array(l).fill(0), (x) => x.fill(0));
