@@ -81,6 +81,14 @@ export class DelayedRc<T> {
   }
 
   /**
+   * Checks if the held object is initialized.
+   * @returns True if the held object is initialized, false otherwise.
+   */
+  get isInitialized(): boolean {
+    return this.#initialized;
+  }
+
+  /**
    * Checks if the reference counter equals to one.
    * @returns True if the reference counter equals to one, false otherwise.
    */

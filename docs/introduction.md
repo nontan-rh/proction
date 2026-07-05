@@ -374,6 +374,28 @@ await calculate(); // Recalculates
 
 If you omit versions, nothing changes compared to the previous sections: unversioned sources are treated as changed on every run, so everything is always recalculated.
 
+## Memoization of Intermediate Results
+
+Intermediate buffers created by indirect functions are returned to their providers at the end of each run, so their contents cannot be reused by the next run. When an intermediate result is expensive, convert the procedure with `toFuncM` (or `toFuncNM` for multiple outputs) instead of `toFunc` / `toFuncN`: the output buffer of the converted function is retained inside the `Context` across runs, and the calculation writing it is skipped while its inputs are unchanged i.e. consumers read the retained buffer directly.
+
+```ts
+const memoDouble = toFuncM(double, (input) => provide(input.length));
+
+async function calculate() {
+  await run(ctx, ({ $s, $d }) => {
+    const m = memoDouble($s(input, inputVersion));
+    cheapProc($d(out, outVersion, (v) => (outVersion = v)), m, $s(other, otherVersion));
+  });
+}
+
+await calculate(); // Computes; the intermediate buffer is retained by `ctx`
+await calculate(); // Nothing changed: everything is skipped
+inputVersion++;    // Input changed
+await calculate(); // Recomputes; the previous buffer returns to the provider
+```
+
+When the buffer itself must live outside the library on externally owned storage, use `$e` instead. Note that a stale external intermediate is recomputed only when some calculation actually reads it.
+
 ## Parallelism
 
 `proc` can take `async` JavaScript functions as their implementation to enable parallel computing. You can use Web Workers, for example, to take advantage of multi-core CPUs. Here is a very simplified example.

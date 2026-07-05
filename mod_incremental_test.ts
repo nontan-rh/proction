@@ -12,6 +12,8 @@ import {
   run,
   type SetVersionFn,
   toFunc,
+  toFuncM,
+  toFuncNM,
   type Version,
 } from "./mod.ts";
 import { Box } from "./_testutils/box.ts";
@@ -51,6 +53,20 @@ function createCountingAdd(testPool: TestPool<Box<number>, []>) {
   const pureAdd = toFunc(add, () => testPool.provide());
 
   return { add, pureAdd, getCount: () => count };
+}
+
+function createCountingMemoAdd(testPool: TestPool<Box<number>, []>) {
+  let count = 0;
+
+  const add = proc(
+    function addBody(result: Box<number>, l: Box<number>, r: Box<number>) {
+      count++;
+      result.value = l.value + r.value;
+    },
+  );
+  const memoAdd = toFuncM(add, () => testPool.provide());
+
+  return { add, memoAdd, getCount: () => count };
 }
 
 const v = (x: number) => x as Version;
@@ -283,6 +299,282 @@ Deno.test(async function staleMemoIsRecomputedOnlyWhenRead() {
   // The repaired content is the recorded one, with a stable version.
   assertEquals(memoTracker.calls, 2);
   assertEquals(memoTracker.version, memoVersion);
+  testPool.assertNoError();
+});
+
+Deno.test(async function evictedMemoIsRecomputedOnlyWhenRead() {
+  const testPool = createBoxedNumberTestPool();
+  const producer = createCountingMemoAdd(testPool);
+  const consumer = createCountingAdd(testPool);
+  const other = createCountingAdd(testPool);
+
+  const ctx = new Context(contextOptions);
+  const a = Box.withValue(1);
+  const b = Box.withValue(2);
+  const out = new Box<number>();
+  const outTracker = createVersionTracker();
+
+  const doRun = () =>
+    run(ctx, ({ $s, $d }) => {
+      const m = producer.memoAdd($s(a, v(1)), $s(b, v(1)));
+      consumer.add(
+        $d(out, outTracker.version, outTracker.setVersion),
+        m,
+        $s(b, v(1)),
+      );
+    });
+
+  await doRun();
+  assertEquals(producer.getCount(), 1);
+
+  // Disposing the context releases the retained buffer but keeps the
+  // committed records, so the wiring is still recognized.
+  ctx[Symbol.dispose]();
+  // Nothing is acquired anymore: the memo buffer went back to the pool.
+  testPool.assertNoError();
+
+  // The memo is gone, but while the destination is up to date nothing
+  // reads it: the producer stays skipped instead of repopulating eagerly.
+  await doRun();
+  assertEquals(producer.getCount(), 1);
+  assertEquals(consumer.getCount(), 1);
+
+  // Once the destination needs recomputation, the memo is recomputed first.
+  outTracker.version = undefined;
+  await doRun();
+  assertEquals(producer.getCount(), 2);
+  assertEquals(consumer.getCount(), 2);
+  assertEquals(out.value, 5);
+
+  // A versioned run without the memo wiring releases the retained buffer
+  // and forgets the wiring's records; the only cost is a recomputation the
+  // next time the wiring appears.
+  const otherOut = new Box<number>();
+  const otherTracker = createVersionTracker();
+  await run(ctx, ({ $s, $d }) => {
+    other.add(
+      $d(otherOut, otherTracker.version, otherTracker.setVersion),
+      $s(a, v(1)),
+      $s(b, v(1)),
+    );
+  });
+  testPool.assertNoError();
+
+  await doRun();
+  assertEquals(producer.getCount(), 3);
+  assertEquals(consumer.getCount(), 3);
+  assertEquals(out.value, 5);
+
+  ctx[Symbol.dispose]();
+  testPool.assertNoError();
+});
+
+Deno.test(async function failedRunKeepsRetainedMemoConsistent() {
+  const testPool = createBoxedNumberTestPool();
+  const producer = createCountingMemoAdd(testPool);
+
+  const ctx = new Context(contextOptions);
+  const a = Box.withValue(1);
+  const b = Box.withValue(2);
+  const out = new Box<number>();
+  const outTracker = createVersionTracker();
+  let aVersion = 1;
+  let explode = false;
+  let consumerCount = 0;
+  const consumer = proc(
+    function consumerBody(
+      result: Box<number>,
+      l: Box<number>,
+      r: Box<number>,
+    ) {
+      consumerCount++;
+      if (explode) {
+        throw new Error("test");
+      }
+      result.value = l.value + r.value;
+    },
+  );
+
+  const doRun = () =>
+    run(ctx, ({ $s, $d }) => {
+      const m = producer.memoAdd($s(a, v(aVersion)), $s(b, v(1)));
+      consumer(
+        $d(out, outTracker.version, outTracker.setVersion),
+        m,
+        $s(b, v(1)),
+      );
+    });
+
+  await doRun();
+  assertEquals(out.value, 5);
+  assertEquals(producer.getCount(), 1);
+
+  // The producer recomputes for the changed source, but the run fails: the
+  // freshly produced buffer is released, and the previously retained buffer
+  // stays consistent with the committed record.
+  a.value = 10;
+  aVersion = 2;
+  explode = true;
+  await assertRejects(doRun, Error, "test");
+  assertEquals(producer.getCount(), 2);
+
+  // Reverting the source matches the retained record again: the producer is
+  // skipped and the consumer reads the retained buffer.
+  a.value = 1;
+  aVersion = 1;
+  explode = false;
+  await doRun();
+  assertEquals(producer.getCount(), 2);
+  assertEquals(consumerCount, 3);
+  assertEquals(out.value, 5);
+
+  ctx[Symbol.dispose]();
+  testPool.assertNoError();
+});
+
+Deno.test(async function toFuncMSkipsProducerAcrossRuns() {
+  const testPool = createBoxedNumberTestPool();
+  const producer = createCountingMemoAdd(testPool);
+  const consumer = createCountingAdd(testPool);
+
+  const ctx = new Context(contextOptions);
+  const a = Box.withValue(1);
+  const b = Box.withValue(2);
+  const out = new Box<number>();
+  const outTracker = createVersionTracker();
+  let aVersion = 1;
+
+  const doRun = () =>
+    run(ctx, ({ $s, $d }) => {
+      const m = producer.memoAdd($s(a, v(aVersion)), $s(b, v(1)));
+      consumer.add(
+        $d(out, outTracker.version, outTracker.setVersion),
+        m,
+        $s(b, v(1)),
+      );
+    });
+
+  await doRun();
+  assertEquals(out.value, 5);
+  assertEquals(producer.getCount(), 1);
+  assertEquals(consumer.getCount(), 1);
+
+  // Unchanged inputs: the producer is skipped; its buffer is retained by
+  // the context.
+  await doRun();
+  assertEquals(producer.getCount(), 1);
+  assertEquals(consumer.getCount(), 1);
+
+  // A changed source recomputes, and the retained buffer is replaced.
+  a.value = 10;
+  aVersion = 2;
+  await doRun();
+  assertEquals(producer.getCount(), 2);
+  assertEquals(consumer.getCount(), 2);
+  assertEquals(out.value, 14);
+
+  ctx[Symbol.dispose]();
+  testPool.assertNoError();
+});
+
+Deno.test(async function toFuncMMemoizesEachWiringSeparately() {
+  const testPool = createBoxedNumberTestPool();
+  const producer = createCountingMemoAdd(testPool);
+  const consumer = createCountingAdd(testPool);
+
+  const ctx = new Context(contextOptions);
+  const a = Box.withValue(1);
+  const b = Box.withValue(2);
+  const c = Box.withValue(10);
+  const out = new Box<number>();
+  const outTracker = createVersionTracker();
+
+  // The same converted function wired with different inputs memoizes each
+  // wiring under its own identity.
+  const doRun = () =>
+    run(ctx, ({ $s, $d }) => {
+      const m1 = producer.memoAdd($s(a, v(1)), $s(b, v(1)));
+      const m2 = producer.memoAdd($s(a, v(1)), $s(c, v(1)));
+      consumer.add(
+        $d(out, outTracker.version, outTracker.setVersion),
+        m1,
+        m2,
+      );
+    });
+
+  await doRun();
+  assertEquals(out.value, 14);
+  assertEquals(producer.getCount(), 2);
+  assertEquals(consumer.getCount(), 1);
+
+  // Unchanged inputs: both wirings are skipped; both buffers are retained.
+  await doRun();
+  assertEquals(producer.getCount(), 2);
+  assertEquals(consumer.getCount(), 1);
+
+  ctx[Symbol.dispose]();
+  testPool.assertNoError();
+});
+
+Deno.test(async function toFuncNMSkipsProducerAcrossRuns() {
+  const testPool = createBoxedNumberTestPool();
+  const consumer = createCountingAdd(testPool);
+
+  let divmodCount = 0;
+  const divmod = procN(
+    function divmodBody(
+      [div, mod]: [Box<number>, Box<number>],
+      l: Box<number>,
+      r: Box<number>,
+    ) {
+      divmodCount++;
+      div.value = Math.floor(l.value / r.value);
+      mod.value = l.value % r.value;
+    },
+  );
+  const memoDivmod = toFuncNM(divmod, [
+    () => testPool.provide(),
+    () => testPool.provide(),
+  ]);
+
+  const ctx = new Context(contextOptions);
+  const a = Box.withValue(17);
+  const b = Box.withValue(5);
+  const out = new Box<number>();
+  const outTracker = createVersionTracker();
+  let aVersion = 1;
+
+  const doRun = () =>
+    run(ctx, ({ $s, $d }) => {
+      const [div, mod] = memoDivmod($s(a, v(aVersion)), $s(b, v(1)));
+      consumer.add(
+        $d(out, outTracker.version, outTracker.setVersion),
+        div,
+        mod,
+      );
+    });
+
+  await doRun();
+  assertEquals(out.value, 5);
+  assertEquals(divmodCount, 1);
+  assertEquals(consumer.getCount(), 1);
+
+  // Unchanged inputs: the producer is skipped; both buffers are retained by
+  // the context.
+  await doRun();
+  assertEquals(divmodCount, 1);
+  assertEquals(consumer.getCount(), 1);
+
+  // A changed source recomputes both outputs, replacing both retained
+  // buffers.
+  a.value = 23;
+  aVersion = 2;
+  await doRun();
+  assertEquals(divmodCount, 2);
+  assertEquals(consumer.getCount(), 2);
+  assertEquals(out.value, 7);
+
+  ctx[Symbol.dispose]();
   testPool.assertNoError();
 });
 

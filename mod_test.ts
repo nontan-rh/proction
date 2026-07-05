@@ -14,10 +14,14 @@ import {
   procN,
   procNI1,
   procNIAll,
+  provider,
   run,
   toFunc,
+  toFuncM,
   toFuncN,
+  toFuncNM,
 } from "./mod.ts";
+import { Pool } from "./_testutils/pool.ts";
 import { Box } from "./_testutils/box.ts";
 import {
   type IPipeBoxR,
@@ -214,6 +218,157 @@ Deno.test(async function externalIntermediate(t) {
     assertEquals(memo, [4, 6]);
     assertEquals(out, [8, 12]);
     testPool.assertNoError();
+  });
+});
+
+Deno.test(async function memoizedFunc(t) {
+  const add = proc(
+    function addBody(result: number[], l: number[], r: number[]) {
+      for (let i = 0; i < result.length; i++) {
+        result[i] = l[i] + r[i];
+      }
+    },
+  );
+
+  await t.step(async function buffersAreRetainedUntilContextDisposal() {
+    const pool = new Pool<number[], [number]>(
+      (l) => new Array(l).fill(0),
+      (x) => x.fill(0),
+      console.error,
+    );
+    const provide = provider(
+      (l: number) => pool.acquire(l),
+      (x) => pool.release(x),
+    );
+    const memoAdd = toFuncM(add, (l: number[]) => provide(l.length));
+
+    const ctx = new Context(contextOptions);
+    const out = new Array(2);
+    const doRun = () =>
+      run(ctx, ({ $s, $d }) => {
+        const m = memoAdd($s([1, 2]), $s([3, 4]));
+        add($d(out), m, $s([10, 20]));
+      });
+
+    await doRun();
+    assertEquals(out, [14, 26]);
+    // The memo buffer stays acquired: the context retains it.
+    assertEquals(pool.acquiredCount, 1);
+
+    // With unversioned sources the producer reruns; the fresh buffer
+    // replaces the retained one, which returns to the pool.
+    await doRun();
+    assertEquals(out, [14, 26]);
+    assertEquals(pool.acquiredCount, 1);
+
+    ctx[Symbol.dispose]();
+    assertEquals(pool.acquiredCount, 0);
+    assertEquals(pool.taintedCount, 0);
+  });
+
+  await t.step(async function multipleOutputsAreRetained() {
+    const testPool = createBoxedNumberTestPool();
+
+    const divmod = procN(
+      function divmodBody(
+        [div, mod]: [Box<number>, Box<number>],
+        l: Box<number>,
+        r: Box<number>,
+      ) {
+        div.value = Math.floor(l.value / r.value);
+        mod.value = l.value % r.value;
+      },
+    );
+    const memoDivmod = toFuncNM(divmod, [
+      () => testPool.provide(),
+      () => testPool.provide(),
+    ]);
+    const addBox = proc(
+      function addBoxBody(result: Box<number>, l: Box<number>, r: Box<number>) {
+        result.value = l.value + r.value;
+      },
+    );
+
+    const ctx = new Context(contextOptions);
+    const out = new Box<number>();
+    await run(ctx, ({ $s, $d }) => {
+      const [div, mod] = memoDivmod(
+        $s(Box.withValue(17)),
+        $s(Box.withValue(5)),
+      );
+      addBox($d(out), div, mod);
+    });
+
+    assertEquals(out.value, 5);
+    ctx[Symbol.dispose]();
+    testPool.assertNoError();
+  });
+
+  await t.step(async function inPlaceConsumerFallsBackToOutOfPlace() {
+    const testPool = createNumberArrayTestPool();
+
+    let usedInPlace = false;
+    const double = procI(
+      function doubleOutOfPlace(result: number[], input: number[]) {
+        for (let i = 0; i < result.length; i++) {
+          result[i] = input[i] * 2;
+        }
+      },
+      function doubleInPlace(inout: number[]) {
+        usedInPlace = true;
+        for (let i = 0; i < inout.length; i++) {
+          inout[i] *= 2;
+        }
+      },
+    );
+    const pureDouble = toFunc(
+      double,
+      (input) => testPool.provide(input.length),
+    );
+    const memoAdd = toFuncM(add, (l) => testPool.provide(l.length));
+
+    const ctx = new Context(contextOptions);
+    const out = new Array(2);
+    await run(ctx, ({ $s, $d }) => {
+      const m = memoAdd($s([1, 2]), $s([3, 4]));
+      const doubled = pureDouble(m);
+      add($d(out), doubled, $s([0, 0]));
+    });
+
+    // The buffer to be retained must not be moved into the intermediate
+    // chain even though it has a single consumer.
+    assertFalse(usedInPlace);
+    assertEquals(out, [8, 12]);
+    ctx[Symbol.dispose]();
+    testPool.assertNoError();
+  });
+
+  await t.step(async function nothingIsRetainedWhenRunFails() {
+    const testPool = createNumberArrayTestPool();
+
+    const explode = proc(
+      function explodeBody(_result: number[], _input: number[]) {
+        throw new Error("test");
+      },
+    );
+    const memoExplode = toFuncM(
+      explode,
+      (input) => testPool.provide(input.length),
+    );
+
+    const ctx = new Context(contextOptions);
+    await assertRejects(
+      () =>
+        run(ctx, ({ $s }) => {
+          memoExplode($s([1, 2]));
+        }),
+      Error,
+      "test",
+    );
+
+    // The produced buffer went back to the provider immediately.
+    testPool.assertNoError();
+    ctx[Symbol.dispose]();
   });
 });
 
@@ -1536,6 +1691,17 @@ Deno.test(function types() {
     (_a: Box<boolean>, _b: Box<bigint>) =>
       testValue<DisposableWrap<Box<string>>>(),
   ]);
+  const sopM = toFuncM(
+    so,
+    (_a: Box<string>, _b: Box<boolean>) =>
+      testValue<DisposableWrap<Box<number>>>(),
+  );
+  const mopM = toFuncNM(mo, [
+    (_a: Box<boolean>, _b: Box<bigint>) =>
+      testValue<DisposableWrap<Box<number>>>(),
+    (_a: Box<boolean>, _b: Box<bigint>) =>
+      testValue<DisposableWrap<Box<string>>>(),
+  ]);
 
   // testValue throws an error
   assertThrows(() => {
@@ -1595,6 +1761,24 @@ Deno.test(function types() {
     assertIsChildTypeOf<Handle<Box<number>>, ReturnType<typeof mop>[0]>();
     assertIsChildTypeOf<ReturnType<typeof mop>[1], Handle<Box<string>>>();
     assertIsChildTypeOf<Handle<Box<string>>, ReturnType<typeof mop>[1]>();
+
+    // sopM: OK
+    sopM(
+      testValue<Handle<Box<string>>>(),
+      testValue<Handle<Box<boolean>>>(),
+    );
+    assertIsChildTypeOf<ReturnType<typeof sopM>, Handle<Box<number>>>();
+    assertIsChildTypeOf<Handle<Box<number>>, ReturnType<typeof sopM>>();
+
+    // mopM: OK
+    mopM(
+      testValue<Handle<Box<boolean>>>(),
+      testValue<Handle<Box<bigint>>>(),
+    );
+    assertIsChildTypeOf<ReturnType<typeof mopM>[0], Handle<Box<number>>>();
+    assertIsChildTypeOf<Handle<Box<number>>, ReturnType<typeof mopM>[0]>();
+    assertIsChildTypeOf<ReturnType<typeof mopM>[1], Handle<Box<string>>>();
+    assertIsChildTypeOf<Handle<Box<string>>, ReturnType<typeof mopM>[1]>();
 
     // so: NG
     so(

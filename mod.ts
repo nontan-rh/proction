@@ -233,7 +233,7 @@ export type ProcOptions = {
 // any later attempt to `restore(plan, inHandle)` will throw.
 //
 // This matters because "output preparation" may indirectly restore inputs.
-// For example, outputs created by `toFunc()`/`toFuncN()` have provide closures
+// For example, outputs created by the `toFunc*()` operators have provide closures
 // that call `restoreInputs(plan, inputs)` to allocate the output objects.
 // That restoration can include the to-be-transferred input handle, even
 // if the provide function ignores that parameter.
@@ -798,6 +798,55 @@ export function toFunc<
 }
 
 /**
+ * Converts an indirect procedure which has a single output to an indirect
+ * function whose output is memoized across runs. The output is created as a
+ * memoized intermediate: its buffer is retained inside the {@link Context}
+ * after a successful run, and the invocation writing it is skipped on later
+ * runs while its inputs are unchanged — consumers read the retained buffer
+ * directly. Memoization is keyed by the procedure, its inputs, and the
+ * identity of `provide`, so convert once and reuse the converted function
+ * across runs; converting anew every run is still correct but recomputes
+ * every run. When the invocation does re-execute, a new buffer is allocated
+ * and the retained one is released only after the run succeeds, so a failed
+ * run leaves the previously retained content valid. Calling the converted
+ * function marks the run as versioned, so such runs on one context must not
+ * overlap.
+ * @typeparam O The output type of the indirect procedure and the return type of the indirect function.
+ * @typeparam I The list of input types of the indirect procedure and the indirect function.
+ * @typeparam A The list of argument types of the provide function. They are also the type of objects created by the provide functions.
+ * @param indirectProcedure The indirect procedure to convert.
+ * @param provide The provide function attached to the indirect function.
+ * Its identity across runs keys the memoization.
+ * @returns The converted indirect function.
+ */
+export function toFuncM<
+  O,
+  I extends readonly UntypedHandle[],
+  A extends O,
+>(
+  indirectProcedure: (
+    output: Handle<O>,
+    ...inputs: I
+  ) => void,
+  provide: (
+    ...inputs: { [key in keyof I]: I[key] extends Handle<infer X> ? X : never }
+  ) => DisposableWrap<A>,
+): (
+  ...inputs: I
+) => Handle<A> {
+  return (...inputs: I): Handle<A> => {
+    const plan = getPlan(...inputs);
+    const output = memoizedIntermediate(
+      plan,
+      () => provide(...restoreInputs(plan, inputs)),
+      provide,
+    );
+    indirectProcedure(output, ...inputs);
+    return output;
+  };
+}
+
+/**
  * Converts an indirect procedure which has multiple outputs to an indirect function.
  * @typeparam O The list of output types of the indirect procedure and the return type of the indirect function.
  * @typeparam I The list of input types of the indirect procedure and the indirect function.
@@ -833,6 +882,69 @@ export function toFuncN<
     for (let i = 0; i < provideFns.length; i++) {
       const provide = provideFns[i];
       const handle = intermediate(
+        plan,
+        () => provide(...restoreInputs(plan, inputs)),
+        provide,
+      );
+      partialOutputs.push(handle);
+    }
+    const outputs = partialOutputs as MappedHandleType<O>;
+
+    indirectProcedure(outputs, ...inputs);
+
+    return outputs;
+  };
+}
+
+/**
+ * Converts an indirect procedure which has multiple outputs to an indirect
+ * function whose outputs are memoized across runs. Each output is created
+ * as a memoized intermediate: its buffer is retained inside the
+ * {@link Context} after a successful run, and the invocation writing it is
+ * skipped on later runs while its inputs are unchanged — consumers read the
+ * retained buffers directly. Memoization is keyed by the procedure, its
+ * inputs, and the identities of the provide functions, so convert once and
+ * reuse the converted function across runs; converting anew every run is
+ * still correct but recomputes every run. When the invocation does
+ * re-execute, new buffers are allocated and the retained ones are released
+ * only after the run succeeds, so a failed run leaves the previously
+ * retained content valid. Calling the converted function marks the run as
+ * versioned, so such runs on one context must not overlap.
+ * @typeparam O The list of output types of the indirect procedure and the return type of the indirect function.
+ * @typeparam I The list of input types of the indirect procedure and the indirect function.
+ * @typeparam A The list of argument types of the provide function. They are also the type of objects created by the provide functions.
+ * @param indirectProcedure The indirect procedure to convert.
+ * @param provideFns The provide functions attached to the indirect
+ * function. Their identities across runs key the memoization.
+ * @returns The converted indirect function.
+ */
+export function toFuncNM<
+  O extends readonly unknown[],
+  I extends readonly UntypedHandle[],
+  A extends O,
+>(
+  indirectProcedure: (
+    outputs: { [key in keyof O]: Handle<O[key]> },
+    ...inputs: I
+  ) => void,
+  provideFns: {
+    [key in keyof O]: (
+      ...inputs: {
+        [key in keyof I]: I[key] extends Handle<infer X> ? X : never;
+      }
+    ) => DisposableWrap<A[key]>;
+  },
+): (
+  ...inputs: I
+) => { [key in keyof O]: Handle<A[key]> } // expanded for readability of inferred type
+{
+  return (...inputs: I): MappedHandleType<O> => {
+    const plan = getPlan(...inputs);
+
+    const partialOutputs = [];
+    for (let i = 0; i < provideFns.length; i++) {
+      const provide = provideFns[i];
+      const handle = memoizedIntermediate(
         plan,
         () => provide(...restoreInputs(plan, inputs)),
         provide,
@@ -897,6 +1009,12 @@ const stateKey = Symbol("state");
 type ContextState = "idle" | "planning" | "running";
 
 /**
+ * An internal symbol used for the key of the buffers of memoized
+ * intermediates retained in a context.
+ */
+const retainedBuffersKey = Symbol("retainedBuffers");
+
+/**
  * A context for a Proction program. It is expected to live some long span in an application.
  */
 export class Context {
@@ -914,6 +1032,31 @@ export class Context {
    * The run state. A new run is accepted only in the "idle" state.
    */
   [stateKey]: ContextState = "idle";
+
+  /**
+   * The buffers of memoized intermediates retained across runs, keyed by
+   * their resolved data IDs. A buffer whose wiring is absent from the
+   * latest versioned run is released back to its provider.
+   */
+  [retainedBuffersKey]: Map<DataID, DisposableWrap<unknown>> = new Map();
+
+  /**
+   * Releases all buffers retained for memoized intermediates back to their
+   * providers. The context remains usable afterwards; later runs simply
+   * recompute and retain again. An exception thrown by a release is routed
+   * to the context's `reportError`.
+   */
+  [Symbol.dispose](): void {
+    const reportError = this[contextOptionsKey].reportError;
+    for (const wrap of this[retainedBuffersKey].values()) {
+      try {
+        wrap[Symbol.dispose]();
+      } catch (e: unknown) {
+        reportError(e);
+      }
+    }
+    this[retainedBuffersKey].clear();
+  }
 
   /**
    * Creates a new context.
@@ -1124,7 +1267,8 @@ type DataSlot =
   | SourceSlot
   | IntermediateSlot
   | DestinationSlot
-  | ExternalIntermediateSlot;
+  | ExternalIntermediateSlot
+  | MemoizedIntermediateSlot;
 /**
  * An internal type to represent a source slot.
  */
@@ -1178,6 +1322,33 @@ type ExternalIntermediateSlot = {
   // undefined), because the recorded version does not describe the content.
   resolvedVersion: Version | undefined;
 };
+/**
+ * An internal type to represent a memoized-intermediate slot: an
+ * intermediate whose buffer is retained inside the context across runs, so
+ * that the invocation writing it can be skipped while its inputs are
+ * unchanged.
+ */
+type MemoizedIntermediateSlot = {
+  type: "memoizedIntermediate";
+  provide: () => DisposableWrap<unknown>;
+  // The stable identity of the provider across runs (see IntermediateSlot).
+  provideKey: object;
+  // The data ID resolved for this output by the incremental pass; it keys
+  // the buffer retained in the context.
+  resolvedDataID: DataID | undefined;
+  // The buffer retained by a previous run, looked up by the incremental
+  // pass. It stays owned by the context; consumers read it when the writing
+  // invocation is skipped.
+  retainedWrap: DisposableWrap<unknown> | undefined;
+  // Holds the buffer produced by this run. Consumers do not reference-count
+  // it: the wrap must survive the whole run to be retained in the context,
+  // so the count stays at its initial 1 until the retention pass extracts it
+  // or cleanup frees it. The retained buffer is never written to:
+  // re-execution allocates a fresh buffer and the retention pass swaps it
+  // in only after the run succeeds.
+  disposableWrapContainer: DelayedRc<DisposableWrap<unknown>>;
+};
+
 /**
  * An internal function to validate the common shape of caller-supplied
  * versions.
@@ -1387,6 +1558,44 @@ function externalIntermediate<T extends object>(
 }
 
 /**
+ * An internal function to create a memoized-intermediate handle and a
+ * memoized-intermediate slot. It backs the outputs of the toFuncM/toFuncNM
+ * conversions. Each call creates a distinct intermediate.
+ * @typeparam T The type of the provided buffer.
+ * @param plan The plan to create the memoized-intermediate handle in.
+ * @param provide The provide function that allocates the buffer.
+ * @param provideKey The stable identity of the provider across runs. It
+ * defaults to `provide` itself; wrappers that recreate the provide closure
+ * per wiring (e.g. toFuncM) must pass the caller's underlying function.
+ * @returns The memoized-intermediate handle.
+ */
+function memoizedIntermediate<T>(
+  plan: Plan,
+  provide: () => DisposableWrap<T>,
+  provideKey: object = provide,
+): Handle<T> {
+  const internalPlan = plan[internalPlanKey];
+  // Memoization is inherently versioned: the retained buffers are shared
+  // state of the context, protected by the versioned-run overlap rejection.
+  internalPlan.usesVersions = true;
+
+  const handle = internalPlan.generateHandle();
+
+  internalPlan.dataSlots.set(handle[handleIdKey], {
+    type: "memoizedIntermediate",
+    provide,
+    provideKey,
+    resolvedDataID: undefined,
+    retainedWrap: undefined,
+    disposableWrapContainer: new DelayedRc((x) => {
+      x[Symbol.dispose]();
+    }, plan.context[contextOptionsKey].reportError),
+  });
+
+  return handle as Handle<T>;
+}
+
+/**
  * An internal function to create an intermediate handle and an intermediate slot. It backs the outputs of the toFunc/toFuncN conversions.
  * @typeparam T The type of the provided object.
  * @param plan The plan to create the intermediate handle in.
@@ -1503,13 +1712,26 @@ async function runPlan(
       // Invocations that started executing may have written their
       // destinations, even the ones that succeeded, and a failed run never
       // reports versions, so the caller's stored claims can go stale. Drop
-      // the committed records of every started invocation so the next
-      // submission re-executes them instead of trusting the records.
-      // Records produced by this run are never committed on failure.
+      // the committed records of every started invocation that writes
+      // caller-visible storage in place so the next submission re-executes
+      // them instead of trusting the records. Memoized and plain
+      // intermediates are produced into fresh buffers that a failed run
+      // releases, so their records still describe the retained content and
+      // are kept. Records produced by this run are never committed on
+      // failure.
       if (pruneResult != null) {
         for (const id of startedInvocations) {
           const draft = pruneResult.drafts.get(id);
-          if (draft != null) {
+          const invocation = internalPlan.invocations.get(id);
+          if (draft == null || invocation == null) {
+            continue;
+          }
+          const writesInPlace = invocation.outputs.some((output) => {
+            const dataSlot = internalPlan.dataSlots.get(output[handleIdKey]);
+            return dataSlot?.type === "destination" ||
+              dataSlot?.type === "externalIntermediate";
+          });
+          if (writesInPlace) {
             pruneResult.graphRun.invalidate(draft);
           }
         }
@@ -1522,6 +1744,7 @@ async function runPlan(
     }
 
     pruneResult?.graphRun.commit();
+    retainMemoizedBuffers(plan, pruneResult != null);
     notifyResolvedVersions(plan);
   } finally {
     try {
@@ -1693,6 +1916,10 @@ function prepareDataSlots(
           break;
         case "externalIntermediate":
           break;
+        case "memoizedIntermediate":
+          // Not reference-counted: the wrap survives the whole run to be
+          // retained in the context.
+          break;
         default:
           return unreachable(type);
       }
@@ -1740,6 +1967,7 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
 
   const graph = plan.context[graphKey];
   const graphRun = graph.beginRun();
+  const retainedBuffers = plan.context[retainedBuffersKey];
 
   // invocation.next and invocation.numBlockers must be left untouched for
   // prepareInvocations; the shared builder returns fresh local maps.
@@ -1823,6 +2051,7 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
           inputVersions.push(dataSlot.version ?? alwaysChangedDataVersion);
           break;
         case "intermediate":
+        case "memoizedIntermediate":
           // No producer in this plan; the invocation cannot be resolved and
           // the run will fail at execution time as usual.
           consultGraph = false;
@@ -1841,6 +2070,7 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
     const outputSlots: (
       | DestinationSlot
       | ExternalIntermediateSlot
+      | MemoizedIntermediateSlot
       | null
     )[] = [];
     if (consultGraph) {
@@ -1880,6 +2110,16 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
             providerIDs.push(unresolvedIntermediateDataID);
             outputSlots.push(dataSlot);
             break;
+          case "memoizedIntermediate":
+            // Resolved like an intermediate: identified by its provider,
+            // with a wildcard version. Whether the writing invocation can
+            // be skipped is decided in the backward pass by the presence of
+            // the retained buffer.
+            outputIDs.push(unresolvedIntermediateDataID);
+            outputVersions.push(unresolvedIntermediateDataVersion);
+            providerIDs.push(graph.resolveDataID(dataSlot.provideKey));
+            outputSlots.push(dataSlot);
+            break;
           default:
             return unreachable(type);
         }
@@ -1912,7 +2152,14 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
 
       const outputSlot = outputSlots[i];
       if (outputSlot != null) {
-        outputSlot.resolvedVersion = resolved.outputVersions[i];
+        if (outputSlot.type === "memoizedIntermediate") {
+          outputSlot.resolvedDataID = resolved.outputIDs[i];
+          outputSlot.retainedWrap = retainedBuffers.get(
+            resolved.outputIDs[i],
+          );
+        } else {
+          outputSlot.resolvedVersion = resolved.outputVersions[i];
+        }
       }
     }
 
@@ -1926,7 +2173,9 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
   // condition here: unchanged already implies they hold the recorded
   // content. An external-intermediate output holding the recorded content
   // (its claimed version matches the resolved one) needs no condition
-  // either; a stale one is tolerated only when every consumer is skipped.
+  // either, and neither does a memoized-intermediate output whose buffer is
+  // retained; an unavailable one is tolerated only when every consumer is
+  // skipped.
   const skippedInvocations = new Set<InvocationID>();
   for (let i = order.length - 1; i >= 0; i--) {
     const invocation = order[i];
@@ -1946,6 +2195,10 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
           dataSlot.version != null &&
           dataSlot.version === dataSlot.resolvedVersion
         ) {
+          continue;
+        }
+      } else if (dataSlot.type === "memoizedIntermediate") {
+        if (dataSlot.retainedWrap != null) {
           continue;
         }
       } else if (dataSlot.type !== "intermediate") {
@@ -2061,6 +2314,78 @@ function notifyResolvedVersions(plan: Plan): void {
 }
 
 /**
+ * An internal function to retain the buffers of memoized intermediates in
+ * the context and to release the retained buffers whose wirings are absent
+ * from this run. It must be called only after all invocations of the plan
+ * finished successfully: a failed run retains nothing, so the buffers
+ * retained by previous runs stay consistent with the committed records.
+ * Buffers produced by wirings that could not be resolved against the graph
+ * have no identity to be retained under and are released immediately, like
+ * plain intermediates.
+ * @param plan The plan whose memoized intermediates are retained.
+ * @param versioned Whether the incremental pass resolved this plan; only
+ * then does the run's wiring set define which retained buffers survive.
+ */
+function retainMemoizedBuffers(plan: Plan, versioned: boolean): void {
+  const reportError = plan.context[contextOptionsKey].reportError;
+  const retainedBuffers = plan.context[retainedBuffersKey];
+
+  const touched = new Set<DataID>();
+  for (const dataSlot of plan[internalPlanKey].dataSlots.values()) {
+    if (dataSlot.type !== "memoizedIntermediate") {
+      continue;
+    }
+
+    const resolvedDataID = dataSlot.resolvedDataID;
+    if (resolvedDataID != null) {
+      touched.add(resolvedDataID);
+    }
+
+    const container = dataSlot.disposableWrapContainer;
+    if (!container.isInitialized) {
+      // The writing invocation was skipped (the retained buffer, if any,
+      // stays) or never existed.
+      continue;
+    }
+
+    const wrap = container.extract();
+    if (resolvedDataID == null) {
+      try {
+        wrap[Symbol.dispose]();
+      } catch (e: unknown) {
+        reportError(e);
+      }
+      continue;
+    }
+
+    const previous = retainedBuffers.get(resolvedDataID);
+    if (previous != null && previous !== wrap) {
+      try {
+        previous[Symbol.dispose]();
+      } catch (e: unknown) {
+        reportError(e);
+      }
+    }
+    retainedBuffers.set(resolvedDataID, wrap);
+  }
+
+  if (!versioned) {
+    return;
+  }
+  for (const [dataID, wrap] of retainedBuffers) {
+    if (touched.has(dataID)) {
+      continue;
+    }
+    try {
+      wrap[Symbol.dispose]();
+    } catch (e: unknown) {
+      reportError(e);
+    }
+    retainedBuffers.delete(dataID);
+  }
+}
+
+/**
  * An internal function to create actual argument list from handles before the execution of an invocation.
  * @typeparam T The type of the argument list.
  * @param plan The plan the handles belong to.
@@ -2101,6 +2426,21 @@ function restore<T>(plan: Plan, handle: Handle<T>): T {
     }
     case "intermediate":
       return dataSlot.disposableWrapContainer.managedObject.body as T;
+    case "memoizedIntermediate": {
+      // When the writing invocation executed, its fresh buffer wins; when it
+      // was skipped, the buffer retained by a previous run serves instead.
+      const container = dataSlot.disposableWrapContainer;
+      if (container.isInitialized) {
+        return container.managedObject.body as T;
+      }
+      const retainedWrap = dataSlot.retainedWrap;
+      if (retainedWrap == null) {
+        throw new LogicError(
+          `memoized intermediate is not available for handle: ${handle}`,
+        );
+      }
+      return retainedWrap.body as T;
+    }
     case "destination":
     case "externalIntermediate": {
       const body = dataSlot.body;
@@ -2205,6 +2545,10 @@ function decRef(plan: Plan, handle: UntypedHandle): void {
       break;
     case "externalIntermediate":
       break;
+    case "memoizedIntermediate":
+      // Not reference-counted: the wrap survives the whole run to be
+      // retained in the context.
+      break;
     default:
       return unreachable(type);
   }
@@ -2230,7 +2574,8 @@ function prepareOutput<T>(
   switch (type) {
     case "source":
       throw new LogicError(`unexpected data slot type: ${type}`);
-    case "intermediate": {
+    case "intermediate":
+    case "memoizedIntermediate": {
       const disposableWrap = dataSlot.provide();
       dataSlot.disposableWrapContainer.initialize(disposableWrap);
       return disposableWrap.body as T;
@@ -2280,7 +2625,24 @@ function ensureAllIntermediateSlotsFreed(plan: Plan) {
       case "source":
         break;
       case "intermediate":
+        // On a successful run, every consumer has released its reference, so
+        // a non-freed container here is a dangling handle no invocation
+        // consumed.
         if (!dataSlot.disposableWrapContainer.isFreed) {
+          hasLeak = true;
+        }
+        dataSlot.disposableWrapContainer.forceCleanUp();
+        break;
+      case "memoizedIntermediate":
+        // An uninitialized container is normal here: the writing invocation
+        // may have been skipped in favor of the retained buffer. On a
+        // successful run, the retention pass has already extracted every
+        // produced wrap, so an initialized non-freed container only remains
+        // when the run failed.
+        if (
+          dataSlot.disposableWrapContainer.isInitialized &&
+          !dataSlot.disposableWrapContainer.isFreed
+        ) {
           hasLeak = true;
         }
         dataSlot.disposableWrapContainer.forceCleanUp();
