@@ -216,7 +216,8 @@ export type GraphRun = {
   /**
    * Resolves an invocation draft against the recorded history. Assigns data
    * IDs and versions to unresolved outputs, and reports whether the
-   * invocation is unchanged since its last recorded resolution.
+   * invocation is unchanged since its last recorded resolution. It must not
+   * be called after `commit()`.
    * @param draft The invocation draft to resolve.
    * @returns The resolved output IDs and versions, and the unchanged flag.
    */
@@ -266,25 +267,33 @@ export class Graph {
     this.#currentDataVersion = runIndexToOutputDataVersion(this.#runIndex);
 
     const version = this.#currentDataVersion;
-    const pending: [InvocationSignature, InvocationRecord][] = [];
+    // The records resolved by this run, keyed by signature so that
+    // identical drafts within one run resolve identically instead of each
+    // minting fresh data IDs.
+    const pending = new HashTable<InvocationSignature, InvocationRecord>(
+      hashInvocationSignature,
+      equalsInvocationSignature,
+    );
     let committed = false;
     return {
       version,
-      resolve: (draft) => this.#resolve(draft, version, pending),
+      resolve: (draft) => {
+        // After commit the pending table is the committed table; a late
+        // resolution would silently corrupt the published records.
+        if (committed) {
+          throw new LogicError("resolve must not be called after commit");
+        }
+        return this.#resolve(draft, version, pending);
+      },
       commit: () => {
         if (committed) {
           return;
         }
         committed = true;
 
-        const next = new HashTable<InvocationSignature, InvocationRecord>(
-          hashInvocationSignature,
-          equalsInvocationSignature,
-        );
-        for (const [signature, record] of pending) {
-          next.set(signature, record);
-        }
-        this.#invocations = next;
+        // The table holds exactly this run's resolutions, so publishing it
+        // wholesale drops every record the run did not resolve.
+        this.#invocations = pending;
       },
       invalidate: (draft) => {
         this.#invocations.delete(signatureOf(draft));
@@ -324,7 +333,7 @@ export class Graph {
   #resolve(
     draft: InvocationDraft,
     version: DataVersion,
-    pending: [InvocationSignature, InvocationRecord][],
+    pending: HashTable<InvocationSignature, InvocationRecord>,
   ): ResolvedInvocation {
     if (
       draft.inputIDs.length !== draft.inputVersions.length ||
@@ -337,15 +346,29 @@ export class Graph {
     const signature = signatureOf(draft);
     const cached = this.#invocations.get(signature);
     if (cached == null) {
+      // Identical wirings within one run must share their generated data
+      // IDs; otherwise each duplicate would retain its own buffer while
+      // only the last-committed record keeps an ID. A signature misses the
+      // committed table consistently within a run, so a pending record
+      // found here is always one this run generated.
+      const generated = pending.get(signature);
+      if (generated != null) {
+        return {
+          outputIDs: generated.outputIDs,
+          outputVersions: generated.outputVersions,
+          unchanged: false,
+        };
+      }
+
       const outputIDs = draft.outputIDs.map((o) =>
         o < 0 ? this.#generateDataID() : o
       );
       const outputVersions = draft.outputVersions.map(() => version);
-      pending.push([signature, {
+      pending.set(signature, {
         inputVersions: draft.inputVersions.slice(),
         outputIDs,
         outputVersions,
-      }]);
+      });
       return { outputIDs, outputVersions, unchanged: false };
     }
 
@@ -354,7 +377,7 @@ export class Graph {
       // the recorded content, so the recorded versions stay accurate even
       // when some output's current content diverged; the record is carried
       // over unmodified.
-      pending.push([signature, cached]);
+      pending.set(signature, cached);
       const unchanged = matchUnresolvedVersionArray(
         draft.outputVersions,
         cached.outputVersions,
@@ -367,11 +390,11 @@ export class Graph {
     }
 
     const outputVersions = cached.outputVersions.map(() => version);
-    pending.push([signature, {
+    pending.set(signature, {
       inputVersions: draft.inputVersions.slice(),
       outputIDs: cached.outputIDs,
       outputVersions,
-    }]);
+    });
     return {
       outputIDs: cached.outputIDs,
       outputVersions,

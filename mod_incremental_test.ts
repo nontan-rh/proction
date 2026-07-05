@@ -302,6 +302,115 @@ Deno.test(async function staleMemoIsRecomputedOnlyWhenRead() {
   testPool.assertNoError();
 });
 
+Deno.test(async function externalIntermediateRejectsUnreportedVersion() {
+  const memo = new Box<number>();
+
+  // An odd claim cannot have been reported via setVersion; accepting it
+  // could alias a caller-managed source version and cause a wrong skip.
+  await assertRejects(
+    () =>
+      run(new Context(contextOptions), ({ $e }) => {
+        $e(memo, v(3));
+      }),
+    Error,
+    "version must be a version reported via setVersion",
+  );
+});
+
+Deno.test(async function staleMemoWithWrongClaimReportsNothing() {
+  const testPool = createBoxedNumberTestPool();
+  const producer = createCountingAdd(testPool);
+  const consumer = createCountingAdd(testPool);
+
+  const ctx = new Context(contextOptions);
+  const a = Box.withValue(1);
+  const b = Box.withValue(2);
+  const memo = new Box<number>();
+  const out = new Box<number>();
+  const memoTracker = createVersionTracker();
+  const outTracker = createVersionTracker();
+
+  const doRun = () =>
+    run(ctx, ({ $s, $d, $e }) => {
+      const m = $e(memo, memoTracker.version, memoTracker.setVersion);
+      producer.add(m, $s(a, v(1)), $s(b, v(1)));
+      consumer.add(
+        $d(out, outTracker.version, outTracker.setVersion),
+        m,
+        $s(b, v(1)),
+      );
+    });
+
+  await doRun();
+  assertEquals(memoTracker.calls, 1);
+  const memoVersion = memoTracker.version;
+  assert(memoVersion != null);
+
+  // Claim an even version that was never recorded for this content. The
+  // destination is up to date, so everything is skipped and the memo stays
+  // stale; per the $e contract no version is reported.
+  memoTracker.version = v(memoVersion + 1000);
+  await doRun();
+  assertEquals(producer.getCount(), 1);
+  assertEquals(consumer.getCount(), 1);
+  assertEquals(memoTracker.calls, 1);
+
+  // Once something reads the memo, it is repaired and reported again.
+  outTracker.version = undefined;
+  await doRun();
+  assertEquals(producer.getCount(), 2);
+  assertEquals(consumer.getCount(), 2);
+  assertEquals(out.value, 5);
+  assertEquals(memoTracker.calls, 2);
+  assertEquals(memoTracker.version, memoVersion);
+  testPool.assertNoError();
+});
+
+Deno.test(async function unversionedRunReleasesRetainedMemo() {
+  const testPool = createBoxedNumberTestPool();
+  const producer = createCountingMemoAdd(testPool);
+  const consumer = createCountingAdd(testPool);
+  const other = createCountingAdd(testPool);
+
+  const ctx = new Context(contextOptions);
+  const a = Box.withValue(1);
+  const b = Box.withValue(2);
+  const out = new Box<number>();
+  const outTracker = createVersionTracker();
+
+  const doRun = () =>
+    run(ctx, ({ $s, $d }) => {
+      const m = producer.memoAdd($s(a, v(1)), $s(b, v(1)));
+      consumer.add(
+        $d(out, outTracker.version, outTracker.setVersion),
+        m,
+        $s(b, v(1)),
+      );
+    });
+
+  await doRun();
+  assertEquals(producer.getCount(), 1);
+
+  // A fully unversioned run on the same context drops all graph records,
+  // so the retained buffer can never be served again and returns to the
+  // pool right away instead of being held until disposal.
+  const otherOut = new Box<number>();
+  await run(ctx, ({ $s, $d }) => {
+    other.add($d(otherOut), $s(Box.withValue(5)), $s(Box.withValue(6)));
+  });
+  assertEquals(otherOut.value, 11);
+  // Nothing is acquired anymore: the memo buffer went back to the pool.
+  testPool.assertNoError();
+
+  // The wiring records are gone too: the next run recomputes and retains.
+  await doRun();
+  assertEquals(producer.getCount(), 2);
+  assertEquals(out.value, 5);
+
+  ctx[Symbol.dispose]();
+  testPool.assertNoError();
+});
+
 Deno.test(async function evictedMemoIsRecomputedOnlyWhenRead() {
   const testPool = createBoxedNumberTestPool();
   const producer = createCountingMemoAdd(testPool);

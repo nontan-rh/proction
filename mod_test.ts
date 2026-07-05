@@ -140,6 +140,23 @@ Deno.test(async function externalIntermediate(t) {
     );
   });
 
+  await t.step(async function selfCycleIsRejected() {
+    const memo = new Array(2);
+
+    // An external intermediate is the natural way to wire an invocation
+    // that reads and writes one buffer; such a self-cycle can never
+    // execute and must fail loudly instead of resolving as a no-op.
+    await assertRejects(
+      () =>
+        run(new Context(contextOptions), ({ $s, $e }) => {
+          const m = $e(memo);
+          add(m, m, $s([1, 2]));
+        }),
+      Error,
+      "dependency cycle",
+    );
+  });
+
   await t.step(async function conflictsWithSourceAndDestination() {
     const buffer = new Array(2);
 
@@ -343,6 +360,57 @@ Deno.test(async function memoizedFunc(t) {
     testPool.assertNoError();
   });
 
+  await t.step(async function duplicateWiringsShareOneRetainedBuffer() {
+    let addCount = 0;
+    const countingAdd = proc(
+      function countingAddBody(result: number[], l: number[], r: number[]) {
+        addCount++;
+        for (let i = 0; i < result.length; i++) {
+          result[i] = l[i] + r[i];
+        }
+      },
+    );
+    const pool = new Pool<number[], [number]>(
+      (l) => new Array(l).fill(0),
+      (x) => x.fill(0),
+      console.error,
+    );
+    const provide = provider(
+      (l: number) => pool.acquire(l),
+      (x) => pool.release(x),
+    );
+    const memoAdd = toFuncM(countingAdd, (l: number[]) => provide(l.length));
+
+    const ctx = new Context(contextOptions);
+    const a = [1, 2];
+    const b = [3, 4];
+    const out = new Array(2);
+    const doRun = () =>
+      run(ctx, ({ $s, $d }) => {
+        const m1 = memoAdd($s(a, 1), $s(b, 1));
+        const m2 = memoAdd($s(a, 1), $s(b, 1));
+        add($d(out), m1, m2);
+      });
+
+    await doRun();
+    assertEquals(out, [8, 12]);
+    assertEquals(addCount, 2);
+    // Identical wirings resolve to one data ID: exactly one buffer stays
+    // retained and the superseded one returns to the pool immediately.
+    assertEquals(pool.acquiredCount, 1);
+
+    // Both duplicates are skipped on the identical run and the consumer
+    // reads the shared retained buffer.
+    await doRun();
+    assertEquals(out, [8, 12]);
+    assertEquals(addCount, 2);
+    assertEquals(pool.acquiredCount, 1);
+
+    ctx[Symbol.dispose]();
+    assertEquals(pool.acquiredCount, 0);
+    assertEquals(pool.taintedCount, 0);
+  });
+
   await t.step(async function nothingIsRetainedWhenRunFails() {
     const testPool = createNumberArrayTestPool();
 
@@ -370,6 +438,35 @@ Deno.test(async function memoizedFunc(t) {
     testPool.assertNoError();
     ctx[Symbol.dispose]();
   });
+});
+
+Deno.test(async function disposeDuringRunIsRejected() {
+  const slowCopy = proc(
+    async function slowCopyBody(result: number[], input: number[]) {
+      await delay(10);
+      for (let i = 0; i < result.length; i++) {
+        result[i] = input[i];
+      }
+    },
+  );
+
+  const ctx = new Context(contextOptions);
+  const out = new Array(2);
+  const pending = run(ctx, ({ $s, $d }) => {
+    slowCopy($d(out), $s([1, 2]));
+  });
+
+  // Disposing mid-run would release retained buffers an invocation may
+  // still be reading; it is rejected like an overlapping run.
+  assertThrows(
+    () => ctx[Symbol.dispose](),
+    Error,
+    "must not be disposed while a run is in flight",
+  );
+
+  await pending;
+  assertEquals(out, [1, 2]);
+  ctx[Symbol.dispose]();
 });
 
 Deno.test(async function empty() {

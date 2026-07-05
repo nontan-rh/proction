@@ -128,15 +128,17 @@ Deno.test(function duplicateResolutionsInOneRunBothMiss() {
     providerIDs: [providerID],
   };
 
-  // A record produced by this run is not visible to this run's resolutions:
-  // an identically-wired sibling must execute on its first submission.
+  // A record produced by this run never marks an identically-wired sibling
+  // unchanged — both must execute on their first submission — but the
+  // siblings share their generated output IDs, so both resolve to the same
+  // data across runs.
   const run = graph.beginRun();
   const first = run.resolve(draft);
   const second = run.resolve(draft);
 
   assertEquals(first.unchanged, false);
   assertEquals(second.unchanged, false);
-  assertNotEquals(second.outputIDs, first.outputIDs);
+  assertEquals(second.outputIDs, first.outputIDs);
 });
 
 Deno.test(function inputVersionBumpChangesThenConverges() {
