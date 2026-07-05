@@ -959,6 +959,8 @@ export async function run(
     $d: (value, version, setVersion) =>
       destination(plan, value, version, setVersion),
     $i: (provide) => intermediate(plan, provide),
+    $e: (value, version, setVersion) =>
+      externalIntermediate(plan, value, version, setVersion),
   };
   bodyFn(runContext);
   await runPlan(plan);
@@ -1033,6 +1035,33 @@ export type RunContext = {
    * @returns The intermediate handle.
    */
   $i<T>(provide: () => DisposableWrap<T>): Handle<T>;
+  /**
+   * Creates an intermediate handle backed by an externally managed buffer.
+   * The buffer is written by the invocation that outputs it and can be read
+   * by other invocations like an intermediate, but its storage and lifetime
+   * are managed by the caller like a destination. With versions it memoizes
+   * the intermediate result across runs: the writing invocation is skipped
+   * while its inputs are unchanged and either the buffer still holds the
+   * recorded content (the version matches) or no surviving invocation reads
+   * the buffer; a stale buffer is recomputed only when some invocation
+   * actually reads it.
+   * @typeparam T The type of the external buffer.
+   * @param value The external buffer.
+   * @param version The version of the content the buffer currently holds,
+   * as previously reported via setVersion. If omitted, the content is
+   * treated as unknown. `$e` may be called at most once per object in a
+   * run; reuse the returned handle instead of calling it again.
+   * @param setVersion A callback that receives the version describing the
+   * buffer's content after a successful run. When the writing invocation is
+   * skipped while the buffer is stale, no version is reported: the content
+   * is unchanged and still described by the version passed in, if any.
+   * @returns The external intermediate handle.
+   */
+  $e<T extends object>(
+    value: T,
+    version?: Version,
+    setVersion?: SetVersionFn,
+  ): Handle<T>;
 };
 
 /**
@@ -1066,6 +1095,7 @@ class InternalPlan {
   plan: Plan;
   inputCache: WeakMap<object, UntypedHandle>;
   outputCache: WeakMap<object, UntypedHandle>;
+  externalCache: WeakMap<object, UntypedHandle>;
   // Whether any $s/$d call supplied a version or a setVersion callback.
   // When false, the incremental pass is skipped entirely.
   usesVersions = false;
@@ -1092,6 +1122,7 @@ class InternalPlan {
     this.plan = undefined!;
     this.inputCache = new WeakMap();
     this.outputCache = new WeakMap();
+    this.externalCache = new WeakMap();
   }
 }
 /**
@@ -1100,7 +1131,8 @@ class InternalPlan {
 type DataSlot =
   | SourceSlot
   | IntermediateSlot
-  | DestinationSlot;
+  | DestinationSlot
+  | ExternalIntermediateSlot;
 /**
  * An internal type to represent a source slot.
  */
@@ -1137,7 +1169,23 @@ type DestinationSlot = {
   // calculated by the incremental pass.
   resolvedVersion: Version | undefined;
 };
-
+/**
+ * An internal type to represent an external-intermediate slot: a
+ * caller-managed buffer used as an intermediate, memoizing its content
+ * across runs when versions are supplied.
+ */
+type ExternalIntermediateSlot = {
+  type: "externalIntermediate";
+  body: unknown;
+  dataID: DataID;
+  version: Version | undefined;
+  setVersion: SetVersionFn | undefined;
+  // The version describing the buffer's content after the run, calculated
+  // by the incremental pass. When the writing invocation is skipped while
+  // the buffer is stale, this is reset to the caller's claimed version (or
+  // undefined), because the recorded version does not describe the content.
+  resolvedVersion: Version | undefined;
+};
 /**
  * An internal function to validate the common shape of caller-supplied
  * versions.
@@ -1223,6 +1271,11 @@ function source<T extends object>(
   if (internalPlan.outputCache.has(value)) {
     throw new PreconditionError("the value is already specified as output");
   }
+  if (internalPlan.externalCache.has(value)) {
+    throw new PreconditionError(
+      "the value is already specified as external intermediate",
+    );
+  }
 
   const handle = internalPlan.generateHandle();
 
@@ -1267,6 +1320,11 @@ function destination<T extends object>(
   if (internalPlan.inputCache.has(value)) {
     throw new PreconditionError("the value is already specified as input");
   }
+  if (internalPlan.externalCache.has(value)) {
+    throw new PreconditionError(
+      "the value is already specified as external intermediate",
+    );
+  }
 
   const handle = internalPlan.generateHandle();
 
@@ -1279,6 +1337,59 @@ function destination<T extends object>(
     resolvedVersion: undefined,
   });
   internalPlan.outputCache.set(value, handle);
+
+  return handle as Handle<T>;
+}
+
+/**
+ * An internal function to create an external-intermediate handle and an
+ * external-intermediate slot. It is the implementation of $e function.
+ * @typeparam T The type of the external buffer.
+ * @param plan The plan to create the external-intermediate handle in.
+ * @param value The external buffer.
+ * @param version The version of the content the buffer currently holds.
+ * @param setVersion The callback that receives the version of the content.
+ * @returns The external-intermediate handle.
+ */
+function externalIntermediate<T extends object>(
+  plan: Plan,
+  value: T,
+  version: Version | undefined,
+  setVersion: SetVersionFn | undefined,
+): Handle<T> {
+  const internalPlan = plan[internalPlanKey];
+
+  // validation (also for repeated calls on the same object)
+  if (version != null && (!Number.isInteger(version) || version < 0)) {
+    throw new PreconditionError("version must be a non-negative integer");
+  }
+  if (version != null || setVersion != null) {
+    internalPlan.usesVersions = true;
+  }
+
+  if (internalPlan.externalCache.has(value)) {
+    throw new PreconditionError(
+      "the value is already specified as external intermediate",
+    );
+  }
+  if (internalPlan.inputCache.has(value)) {
+    throw new PreconditionError("the value is already specified as input");
+  }
+  if (internalPlan.outputCache.has(value)) {
+    throw new PreconditionError("the value is already specified as output");
+  }
+
+  const handle = internalPlan.generateHandle();
+
+  internalPlan.dataSlots.set(handle[handleIdKey], {
+    type: "externalIntermediate",
+    body: value,
+    dataID: plan.context[graphKey].resolveDataID(value),
+    version,
+    setVersion,
+    resolvedVersion: undefined,
+  });
+  internalPlan.externalCache.set(value, handle);
 
   return handle as Handle<T>;
 }
@@ -1419,7 +1530,7 @@ async function runPlan(
     }
 
     pruneResult?.graphRun.commit();
-    notifyDestinationVersions(plan);
+    notifyResolvedVersions(plan);
   } finally {
     try {
       ensureAllIntermediateSlotsFreed(plan);
@@ -1588,6 +1699,8 @@ function prepareDataSlots(
           break;
         case "destination":
           break;
+        case "externalIntermediate":
+          break;
         default:
           return unreachable(type);
       }
@@ -1711,8 +1824,9 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
           );
           break;
         case "destination":
-          // A destination version is a generated version round-tripped
-          // through the caller, used verbatim.
+        case "externalIntermediate":
+          // A destination or external-intermediate version is a generated
+          // version round-tripped through the caller, used verbatim.
           inputIDs.push(dataSlot.dataID);
           inputVersions.push(dataSlot.version ?? alwaysChangedDataVersion);
           break;
@@ -1732,7 +1846,11 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
     const outputIDs: DataID[] = [];
     const outputVersions: DataVersion[] = [];
     const providerIDs: DataID[] = [];
-    const destinationSlots: (DestinationSlot | null)[] = [];
+    const outputSlots: (
+      | DestinationSlot
+      | ExternalIntermediateSlot
+      | null
+    )[] = [];
     if (consultGraph) {
       for (const output of invocation.outputs) {
         const id = output[handleIdKey];
@@ -1751,13 +1869,24 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
             outputIDs.push(dataSlot.dataID);
             outputVersions.push(dataSlot.version ?? unknownDataVersion);
             providerIDs.push(undefinedProviderID);
-            destinationSlots.push(dataSlot);
+            outputSlots.push(dataSlot);
             break;
           case "intermediate":
             outputIDs.push(unresolvedIntermediateDataID);
             outputVersions.push(unresolvedIntermediateDataVersion);
             providerIDs.push(graph.resolveDataID(dataSlot.provideKey));
-            destinationSlots.push(null);
+            outputSlots.push(null);
+            break;
+          case "externalIntermediate":
+            // The buffer has a stable external identity, but its version
+            // acts as a wildcard for the unchanged check: whether the
+            // invocation can be skipped is decided in the backward pass,
+            // where a stale buffer is tolerated when no surviving
+            // invocation reads it.
+            outputIDs.push(dataSlot.dataID);
+            outputVersions.push(unresolvedIntermediateDataVersion);
+            providerIDs.push(unresolvedIntermediateDataID);
+            outputSlots.push(dataSlot);
             break;
           default:
             return unreachable(type);
@@ -1789,9 +1918,9 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
         version: resolved.outputVersions[i],
       });
 
-      const destinationSlot = destinationSlots[i];
-      if (destinationSlot != null) {
-        destinationSlot.resolvedVersion = resolved.outputVersions[i];
+      const outputSlot = outputSlots[i];
+      if (outputSlot != null) {
+        outputSlot.resolvedVersion = resolved.outputVersions[i];
       }
     }
 
@@ -1802,7 +1931,10 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
 
   // Backward pass: an unchanged invocation is skipped when every consumer of
   // each of its intermediate outputs is skipped. Destination outputs need no
-  // condition here: unchanged already implies they hold the recorded content.
+  // condition here: unchanged already implies they hold the recorded
+  // content. An external-intermediate output holding the recorded content
+  // (its claimed version matches the resolved one) needs no condition
+  // either; a stale one is tolerated only when every consumer is skipped.
   const skippedInvocations = new Set<InvocationID>();
   for (let i = order.length - 1; i >= 0; i--) {
     const invocation = order[i];
@@ -1814,7 +1946,17 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
     for (const output of invocation.outputs) {
       const id = output[handleIdKey];
       const dataSlot = internalPlan.dataSlots.get(id);
-      if (dataSlot == null || dataSlot.type !== "intermediate") {
+      if (dataSlot == null) {
+        continue;
+      }
+      if (dataSlot.type === "externalIntermediate") {
+        if (
+          dataSlot.version != null &&
+          dataSlot.version === dataSlot.resolvedVersion
+        ) {
+          continue;
+        }
+      } else if (dataSlot.type !== "intermediate") {
         continue;
       }
 
@@ -1835,6 +1977,20 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
 
     if (skippable) {
       skippedInvocations.add(invocation.id);
+      // A skipped invocation leaves a stale external intermediate
+      // untouched: its content is still described by the caller's original
+      // claim, not by the recorded version, so the claim is what setVersion
+      // may report.
+      for (const output of invocation.outputs) {
+        const dataSlot = internalPlan.dataSlots.get(output[handleIdKey]);
+        if (
+          dataSlot != null &&
+          dataSlot.type === "externalIntermediate" &&
+          dataSlot.resolvedVersion !== dataSlot.version
+        ) {
+          dataSlot.resolvedVersion = dataSlot.version;
+        }
+      }
     }
   }
 
@@ -1882,16 +2038,19 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
 }
 
 /**
- * An internal function to report the resolved versions of destinations to
- * the caller. It must be called only after all invocations of the plan
- * finished successfully, so that reported versions always describe content
- * that is actually available.
- * @param plan The plan whose destination versions are reported.
+ * An internal function to report the resolved versions of destinations and
+ * external intermediates to the caller. It must be called only after all
+ * invocations of the plan finished successfully, so that reported versions
+ * always describe content that is actually available.
+ * @param plan The plan whose resolved versions are reported.
  */
-function notifyDestinationVersions(plan: Plan): void {
+function notifyResolvedVersions(plan: Plan): void {
   const reportError = plan.context[contextOptionsKey].reportError;
   for (const dataSlot of plan[internalPlanKey].dataSlots.values()) {
-    if (dataSlot.type !== "destination") {
+    if (
+      dataSlot.type !== "destination" &&
+      dataSlot.type !== "externalIntermediate"
+    ) {
       continue;
     }
     const resolvedVersion = dataSlot.resolvedVersion;
@@ -1950,7 +2109,8 @@ function restore<T>(plan: Plan, handle: Handle<T>): T {
     }
     case "intermediate":
       return dataSlot.disposableWrapContainer.managedObject.body as T;
-    case "destination": {
+    case "destination":
+    case "externalIntermediate": {
       const body = dataSlot.body;
       return body as T;
     }
@@ -2051,6 +2211,8 @@ function decRef(plan: Plan, handle: UntypedHandle): void {
       break;
     case "destination":
       break;
+    case "externalIntermediate":
+      break;
     default:
       return unreachable(type);
   }
@@ -2081,7 +2243,8 @@ function prepareOutput<T>(
       dataSlot.disposableWrapContainer.initialize(disposableWrap);
       return disposableWrap.body as T;
     }
-    case "destination": {
+    case "destination":
+    case "externalIntermediate": {
       const body = dataSlot.body;
       return body as T;
     }
@@ -2131,6 +2294,8 @@ function ensureAllIntermediateSlotsFreed(plan: Plan) {
         dataSlot.disposableWrapContainer.forceCleanUp();
         break;
       case "destination":
+        break;
+      case "externalIntermediate":
         break;
       default:
         return unreachable(type);

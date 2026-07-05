@@ -193,6 +193,99 @@ Deno.test(async function unversionedDestinationAlwaysReruns() {
   testPool.assertNoError();
 });
 
+Deno.test(async function externalIntermediateMemoizesAcrossRuns() {
+  const testPool = createBoxedNumberTestPool();
+  const producer = createCountingAdd(testPool);
+  const consumer = createCountingAdd(testPool);
+
+  const ctx = new Context(contextOptions);
+  const a = Box.withValue(1);
+  const b = Box.withValue(2);
+  const memo = new Box<number>();
+  const out = new Box<number>();
+  const memoTracker = createVersionTracker();
+  const outTracker = createVersionTracker();
+
+  const doRun = () =>
+    run(ctx, ({ $s, $d, $e }) => {
+      const m = $e(memo, memoTracker.version, memoTracker.setVersion);
+      producer.add(m, $s(a, v(1)), $s(b, v(1)));
+      consumer.add(
+        $d(out, outTracker.version, outTracker.setVersion),
+        m,
+        $s(b, v(1)),
+      );
+    });
+
+  await doRun();
+  assertEquals(memo.value, 3);
+  assertEquals(out.value, 5);
+  assertEquals(producer.getCount(), 1);
+  assertEquals(consumer.getCount(), 1);
+  assertEquals(memoTracker.calls, 1);
+  const memoVersion = memoTracker.version;
+  assert(memoVersion != null);
+
+  // The memo and the destination both hold recorded content: nothing runs.
+  await doRun();
+  assertEquals(producer.getCount(), 1);
+  assertEquals(consumer.getCount(), 1);
+  assertEquals(memoTracker.calls, 2);
+  assertEquals(memoTracker.version, memoVersion);
+  testPool.assertNoError();
+});
+
+Deno.test(async function staleMemoIsRecomputedOnlyWhenRead() {
+  const testPool = createBoxedNumberTestPool();
+  const producer = createCountingAdd(testPool);
+  const consumer = createCountingAdd(testPool);
+
+  const ctx = new Context(contextOptions);
+  const a = Box.withValue(1);
+  const b = Box.withValue(2);
+  const memo = new Box<number>();
+  const out = new Box<number>();
+  const memoTracker = createVersionTracker();
+  const outTracker = createVersionTracker();
+
+  const doRun = () =>
+    run(ctx, ({ $s, $d, $e }) => {
+      const m = $e(memo, memoTracker.version, memoTracker.setVersion);
+      producer.add(m, $s(a, v(1)), $s(b, v(1)));
+      consumer.add(
+        $d(out, outTracker.version, outTracker.setVersion),
+        m,
+        $s(b, v(1)),
+      );
+    });
+
+  await doRun();
+  assertEquals(producer.getCount(), 1);
+  const memoVersion = memoTracker.version;
+  assert(memoVersion != null);
+
+  // Forget the memo version. The destination is still up to date, so
+  // neither invocation runs and the stale memo is left as is; its unknown
+  // content must not be reported as the recorded version.
+  memoTracker.version = undefined;
+  await doRun();
+  assertEquals(producer.getCount(), 1);
+  assertEquals(consumer.getCount(), 1);
+  assertEquals(memoTracker.calls, 1);
+  assertEquals(memoTracker.version, undefined);
+
+  // Once the destination needs recomputation, the memo is repaired first.
+  outTracker.version = undefined;
+  await doRun();
+  assertEquals(producer.getCount(), 2);
+  assertEquals(consumer.getCount(), 2);
+  assertEquals(out.value, 5);
+  // The repaired content is the recorded one, with a stable version.
+  assertEquals(memoTracker.calls, 2);
+  assertEquals(memoTracker.version, memoVersion);
+  testPool.assertNoError();
+});
+
 Deno.test(async function sharedIntermediateWithMixedConsumers() {
   const testPool = createBoxedNumberTestPool();
   const producer = createCountingAdd(testPool);

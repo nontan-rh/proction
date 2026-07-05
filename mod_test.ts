@@ -1,4 +1,9 @@
-import { assertEquals, assertRejects, assertThrows } from "@std/assert";
+import {
+  assertEquals,
+  assertFalse,
+  assertRejects,
+  assertThrows,
+} from "@std/assert";
 import { delay } from "@std/async";
 import {
   Context,
@@ -93,6 +98,123 @@ Deno.test(async function parameterizedAllocation() {
 
   assertEquals(resultBody, [111, 222, 333, 444, 555]);
   testPool.assertNoError();
+});
+
+Deno.test(async function externalIntermediate(t) {
+  const add = proc(
+    function addBody(result: number[], l: number[], r: number[]) {
+      for (let i = 0; i < result.length; i++) {
+        result[i] = l[i] + r[i];
+      }
+    },
+  );
+
+  await t.step(async function externalBufferCarriesIntermediate() {
+    const memo = new Array(2);
+    const out = new Array(2);
+    await run(new Context(contextOptions), ({ $s, $d, $e }) => {
+      const m = $e(memo);
+      add(m, $s([1, 2]), $s([3, 4]));
+      add($d(out), m, $s([10, 20]));
+    });
+
+    assertEquals(memo, [4, 6]);
+    assertEquals(out, [14, 26]);
+  });
+
+  await t.step(async function repeatedCallsAreRejected() {
+    const memo = new Array(2);
+    const out = new Array(2);
+    await assertRejects(
+      () =>
+        run(new Context(contextOptions), ({ $s, $d, $e }) => {
+          add($e(memo), $s([1, 2]), $s([3, 4]));
+          add($d(out), $e(memo), $s([10, 20]));
+        }),
+      Error,
+      "already specified as external intermediate",
+    );
+  });
+
+  await t.step(async function conflictsWithSourceAndDestination() {
+    const buffer = new Array(2);
+
+    await assertRejects(
+      () =>
+        run(new Context(contextOptions), ({ $s, $e }) => {
+          $e(buffer);
+          $s(buffer);
+        }),
+      Error,
+      "already specified as external intermediate",
+    );
+    await assertRejects(
+      () =>
+        run(new Context(contextOptions), ({ $d, $e }) => {
+          $e(buffer);
+          $d(buffer);
+        }),
+      Error,
+      "already specified as external intermediate",
+    );
+    await assertRejects(
+      () =>
+        run(new Context(contextOptions), ({ $s, $e }) => {
+          $s(buffer);
+          $e(buffer);
+        }),
+      Error,
+      "already specified as input",
+    );
+    await assertRejects(
+      () =>
+        run(new Context(contextOptions), ({ $d, $e }) => {
+          $d(buffer);
+          $e(buffer);
+        }),
+      Error,
+      "already specified as output",
+    );
+  });
+
+  await t.step(async function inPlaceConsumerFallsBackToOutOfPlace() {
+    const testPool = createNumberArrayTestPool();
+
+    let usedInPlace = false;
+    const double = procI(
+      function doubleOutOfPlace(result: number[], input: number[]) {
+        for (let i = 0; i < result.length; i++) {
+          result[i] = input[i] * 2;
+        }
+      },
+      function doubleInPlace(inout: number[]) {
+        usedInPlace = true;
+        for (let i = 0; i < inout.length; i++) {
+          inout[i] *= 2;
+        }
+      },
+    );
+    const pureDouble = toFunc(
+      double,
+      (input) => testPool.provide(input.length),
+    );
+
+    const memo = new Array(2);
+    const out = new Array(2);
+    await run(new Context(contextOptions), ({ $s, $d, $e }) => {
+      const m = $e(memo);
+      add(m, $s([1, 2]), $s([3, 4]));
+      const doubled = pureDouble(m);
+      add($d(out), doubled, $s([0, 0]));
+    });
+
+    // The external buffer must not be moved into the intermediate chain
+    // even though it has a single consumer; the caller owns it.
+    assertFalse(usedInPlace);
+    assertEquals(memo, [4, 6]);
+    assertEquals(out, [8, 12]);
+    testPool.assertNoError();
+  });
 });
 
 Deno.test(async function empty() {
