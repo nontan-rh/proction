@@ -517,14 +517,13 @@ Deno.test(async function middleware(t) {
 
   await t.step(async function inPlaceSingle() {
     const testPool = createBoxedNumberTestPool();
+    const pureDouble = toFunc(double, () => testPool.provide());
     const output = new Box<number>();
 
-    await run(new Context(contextOptions), ({ $s, $d, $i }) => {
+    await run(new Context(contextOptions), ({ $s, $d }) => {
       const input = $s(Box.withValue(1));
-      const intermediate1 = $i(() => testPool.provide());
-      const intermediate2 = $i(() => testPool.provide());
-      double(intermediate1, input);
-      double(intermediate2, intermediate1);
+      const intermediate1 = pureDouble(input);
+      const intermediate2 = pureDouble(intermediate1);
       double($d(output), intermediate2);
     });
 
@@ -869,14 +868,15 @@ Deno.test(async function procNI1InPlace(t) {
     boxPool.assertNoError();
   });
 
-  await t.step(async function restOutputIsIntermediate() {
+  await t.step(async function restOutputIsExternalIntermediate() {
     const { normalizeAndNorm, getVariantsUsed } = getNormalizer();
 
     const normalizedBody = [0, 0];
+    const normBody = new Box<number>();
     const resultBody = new Box<number>();
 
-    await run(new Context(contextOptions), ({ $s, $d, $i }) => {
-      const normIntermediate = $i(() => boxPool.provide());
+    await run(new Context(contextOptions), ({ $s, $d, $e }) => {
+      const normIntermediate = $e(normBody);
       normalizeAndNorm(
         [$d(normalizedBody), normIntermediate],
         $s([3, 4]),
@@ -1064,12 +1064,13 @@ Deno.test(async function procNIAllInPlace(t) {
   await t.step(async function oneOutputIsGlobalFallsBackToOutOfPlace() {
     const { normalizeDual, getVariantsUsed } = getDualNormalizer();
 
+    const outputABody = [0, 0];
     const resultABody = [0, 0];
     const resultBBody = [0, 0];
-    await run(new Context(contextOptions), ({ $s, $d, $i }) => {
+    await run(new Context(contextOptions), ({ $s, $d, $e }) => {
       const intermediateA = pureScale($s([3, 4]), $s(Box.withValue(1)));
       const intermediateB = pureScale($s([5, 12]), $s(Box.withValue(1)));
-      const outputA = $i(() => arrayPool.provide(2));
+      const outputA = $e(outputABody);
       normalizeDual(
         [outputA, $d(resultBBody)],
         intermediateA,
@@ -1228,14 +1229,14 @@ Deno.test(async function errorPaths(t) {
         result[i] = input[i];
       }
     });
+    const pureCopy = toFunc(copy, (): DisposableWrap<number[]> => {
+      throw new Error("test");
+    });
 
     await assertRejects(
       () =>
-        run(new Context(contextOptions), ({ $s, $i }) => {
-          const output = $i<number[]>(() => {
-            throw new Error("test");
-          });
-          copy(output, $s([1, 2]));
+        run(new Context(contextOptions), ({ $s }) => {
+          pureCopy($s([1, 2]));
         }),
       Error,
       "test",
@@ -1255,18 +1256,21 @@ Deno.test(async function errorPaths(t) {
     let provide0Called = false;
     let provide1Called = false;
 
+    const pureTwo = toFuncN(two, [
+      () => {
+        provide0Called = true;
+        return boxPool.provide();
+      },
+      (): DisposableWrap<Box<number>> => {
+        provide1Called = true;
+        throw new Error("test");
+      },
+    ]);
+
     await assertRejects(
       () =>
-        run(new Context(contextOptions), ({ $s, $i }) => {
-          const output0 = $i(() => {
-            provide0Called = true;
-            return boxPool.provide();
-          });
-          const output1 = $i<Box<number>>(() => {
-            provide1Called = true;
-            throw new Error("test");
-          });
-          two([output0, output1], $s(Box.withValue(1)));
+        run(new Context(contextOptions), ({ $s }) => {
+          pureTwo($s(Box.withValue(1)));
         }),
       Error,
       "test",
@@ -1295,13 +1299,13 @@ Deno.test(async function errorPaths(t) {
         throw new Error("test");
       },
     );
+    const pureExplode = toFunc(explode, () => arrayPool.provide(2));
 
     await assertRejects(
       () =>
-        run(new Context(contextOptions), ({ $s, $i }) => {
+        run(new Context(contextOptions), ({ $s }) => {
           const input0 = pureCopy($s([1, 2]));
-          const output = $i(() => arrayPool.provide(2));
-          explode(output, input0);
+          pureExplode(input0);
         }),
       Error,
       "test",
@@ -1339,18 +1343,19 @@ Deno.test(async function errorPaths(t) {
 
       let provideCalled = false;
 
+      const purePassThroughAndFlag = toFuncN(passThroughAndFlag, [
+        () => arrayPool.provide(2),
+        (): DisposableWrap<Box<number>> => {
+          provideCalled = true;
+          throw new Error("test");
+        },
+      ]);
+
       await assertRejects(
         () =>
-          run(new Context(contextOptions), ({ $s, $i }) => {
+          run(new Context(contextOptions), ({ $s }) => {
             const input0 = pureCopy($s([1, 2]));
-
-            const output0 = $i(() => arrayPool.provide(2));
-            const flag = $i<Box<number>>(() => {
-              provideCalled = true;
-              throw new Error("test");
-            });
-
-            passThroughAndFlag([output0, flag], input0);
+            purePassThroughAndFlag(input0);
           }),
         Error,
         "test",
@@ -1383,15 +1388,17 @@ Deno.test(async function errorPaths(t) {
         throw new Error("test");
       },
     );
+    const pureExplode = toFuncN(explode, [
+      () => arrayPool.provide(2),
+      () => arrayPool.provide(2),
+    ]);
 
     await assertRejects(
       () =>
-        run(new Context(contextOptions), ({ $s, $i }) => {
+        run(new Context(contextOptions), ({ $s }) => {
           const a = pureCopy($s([1, 2]));
           const b = pureCopy($s([3, 4]));
-          const outA = $i(() => arrayPool.provide(2));
-          const outB = $i(() => arrayPool.provide(2));
-          explode([outA, outB], a, b);
+          pureExplode(a, b);
         }),
       Error,
       "test",

@@ -958,7 +958,6 @@ export async function run(
     $s: (value, version) => source(plan, value, version),
     $d: (value, version, setVersion) =>
       destination(plan, value, version, setVersion),
-    $i: (provide) => intermediate(plan, provide),
     $e: (value, version, setVersion) =>
       externalIntermediate(plan, value, version, setVersion),
   };
@@ -1028,13 +1027,6 @@ export type RunContext = {
     version?: Version,
     setVersion?: SetVersionFn,
   ): Handle<T>;
-  /**
-   * Creates an intermediate handle. It is currently only for testing.
-   * @typeparam T The type of the provided object.
-   * @param provide The provide function.
-   * @returns The intermediate handle.
-   */
-  $i<T>(provide: () => DisposableWrap<T>): Handle<T>;
   /**
    * Creates an intermediate handle backed by an externally managed buffer.
    * The buffer is written by the invocation that outputs it and can be read
@@ -1395,7 +1387,7 @@ function externalIntermediate<T extends object>(
 }
 
 /**
- * An internal function to create an intermediate handle and an intermediate slot. It is the implementation of $i function.
+ * An internal function to create an intermediate handle and an intermediate slot. It backs the outputs of the toFunc/toFuncN conversions.
  * @typeparam T The type of the provided object.
  * @param plan The plan to create the intermediate handle in.
  * @param provide The provide function.
