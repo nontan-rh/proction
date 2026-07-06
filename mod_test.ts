@@ -238,6 +238,138 @@ Deno.test(async function externalIntermediate(t) {
   });
 });
 
+Deno.test(async function invalidWiringIsRejected(t) {
+  let ran = 0;
+  const add = proc(
+    function addBody(result: number[], l: number[], r: number[]) {
+      ran++;
+      for (let i = 0; i < result.length; i++) {
+        result[i] = l[i] + r[i];
+      }
+    },
+  );
+
+  await t.step(async function readingUnwrittenDestinationIsRejected() {
+    const readOnly = [10, 20];
+    const out = new Array(2);
+
+    // The same wiring is rejected with and without versions: the wiring
+    // validation runs before the versioned and unversioned paths split.
+    ran = 0;
+    await assertRejects(
+      () =>
+        run(new Context(contextOptions), ({ $s, $d }) => {
+          add($d(out), $d(readOnly), $s([1, 2]));
+        }),
+      Error,
+      "destination handle is read",
+    );
+    await assertRejects(
+      () =>
+        run(new Context(contextOptions), ({ $s, $d }) => {
+          add($d(out, undefined, () => {}), $d(readOnly), $s([1, 2], 1));
+        }),
+      Error,
+      "destination handle is read",
+    );
+    assertEquals(ran, 0);
+  });
+
+  await t.step(async function readingProducedDestinationIsRejected() {
+    const mid = new Array(2);
+    const out = new Array(2);
+
+    // Destinations are write-only even when an invocation of the same plan
+    // writes them; a buffer that carries data to a consumer belongs to $e.
+    ran = 0;
+    await assertRejects(
+      () =>
+        run(new Context(contextOptions), ({ $s, $d }) => {
+          const midHandle = $d(mid);
+          add($d(out), midHandle, $s([10, 20]));
+          add(midHandle, $s([1, 2]), $s([3, 4]));
+        }),
+      Error,
+      "destination handle is read",
+    );
+    assertEquals(ran, 0);
+  });
+
+  await t.step(async function consumingUnproducedIntermediateIsRejected() {
+    // An indirect procedure that never wires an invocation leaves the
+    // handle returned by the converted function without a producer.
+    const noWire = toFunc(
+      (_output: Handle<number[]>, _input: Handle<number[]>) => {},
+      (): DisposableWrap<number[]> => ({
+        body: new Array(2),
+        [Symbol.dispose]: () => {},
+      }),
+    );
+    const out = new Array(2);
+
+    ran = 0;
+    await assertRejects(
+      () =>
+        run(new Context(contextOptions), ({ $s, $d }) => {
+          add($d(out), noWire($s([1, 2])), $s([3, 4]));
+        }),
+      Error,
+      "intermediate handle is consumed but never produced",
+    );
+    assertEquals(ran, 0);
+  });
+
+  await t.step(async function writingSourceIsRejected() {
+    const src = [1, 2];
+    const other = [3, 4];
+    const out = new Array(2);
+
+    ran = 0;
+    await assertRejects(
+      () =>
+        run(new Context(contextOptions), ({ $s, $d }) => {
+          add($s(src), $s(other), $s(other));
+          // A valid sibling does not run: the plan is rejected up front.
+          add($d(out), $s(other), $s(other));
+        }),
+      Error,
+      "source handle is written",
+    );
+    assertEquals(ran, 0);
+  });
+});
+
+Deno.test(async function cycleFailsBeforeAnythingRuns() {
+  let ran = 0;
+  const add = proc(
+    function addBody(result: number[], l: number[], r: number[]) {
+      ran++;
+      for (let i = 0; i < result.length; i++) {
+        result[i] = l[i] + r[i];
+      }
+    },
+  );
+
+  const memo = new Array(2);
+  const out = new Array(2);
+
+  // A dependency cycle is rejected while the dependency maps are built,
+  // before any invocation executes, so even invocations outside the cycle
+  // leave no side effects.
+  await assertRejects(
+    () =>
+      run(new Context(contextOptions), ({ $s, $d, $e }) => {
+        add($d(out), $s([1, 2]), $s([3, 4]));
+        const m = $e(memo);
+        add(m, m, $s([5, 6]));
+      }),
+    Error,
+    "dependency cycle",
+  );
+  assertEquals(ran, 0);
+  assertEquals(out, new Array(2));
+});
+
 Deno.test(async function memoizedFunc(t) {
   const add = proc(
     function addBody(result: number[], l: number[], r: number[]) {
@@ -572,12 +704,14 @@ Deno.test(async function outputUsage(t) {
     assertEquals(result2Body.value, 48);
   });
 
-  await t.step(async function globalOutputIsUsedAsInput() {
+  await t.step(async function externalIntermediateIsUsedAsInput() {
     const sumBody = new Box<number>();
     const resultBody = new Box<number>();
 
-    await run(new Context(contextOptions), ({ $s, $d }) => {
-      const sum = $d(sumBody);
+    // Destinations are write-only; a caller-visible buffer that also feeds
+    // a consumer is an external intermediate.
+    await run(new Context(contextOptions), ({ $s, $d, $e }) => {
+      const sum = $e(sumBody);
       const result = $d(resultBody);
 
       add(sum, $s(Box.withValue(42)), $s(Box.withValue(2)));

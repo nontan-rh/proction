@@ -1003,7 +1003,7 @@ Deno.test(async function zeroConsumerInvocationIsSkipped() {
   testPool.assertNoError();
 });
 
-Deno.test(async function destinationAsInputWiredBeforeProducer() {
+Deno.test(async function externalIntermediateAsInputWiredBeforeProducer() {
   const testPool = createBoxedNumberTestPool();
   const writer = createCountingAdd(testPool);
   const reader = createCountingAdd(testPool);
@@ -1019,9 +1019,10 @@ Deno.test(async function destinationAsInputWiredBeforeProducer() {
   let aVersion = 1;
 
   const doRun = () =>
-    run(ctx, ({ $s, $d }) => {
-      const midHandle = $d(mid, trackerMid.version, trackerMid.setVersion);
-      // The consumer of the destination is wired before its producer.
+    run(ctx, ({ $s, $d, $e }) => {
+      const midHandle = $e(mid, trackerMid.version, trackerMid.setVersion);
+      // The consumer of the external intermediate is wired before its
+      // producer.
       reader.add(
         $d(out, trackerOut.version, trackerOut.setVersion),
         midHandle,
@@ -1355,8 +1356,8 @@ Deno.test(async function sourceVersionCannotCollideWithGeneratedVersion() {
 
   // Run 1: mid is produced by the plan, so the reader's record stores a
   // generated version for it.
-  await run(ctx, ({ $s, $d }) => {
-    const midHandle = $d(mid);
+  await run(ctx, ({ $s, $d, $e }) => {
+    const midHandle = $e(mid);
     writer.add(midHandle, $s(a, 1), $s(b, 1));
     reader.add(
       $d(out, trackerOut.version, trackerOut.setVersion),

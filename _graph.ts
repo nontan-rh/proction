@@ -8,6 +8,13 @@ export type ProcID = Brand<number, "procID">;
 export type DataID = Brand<number, "dataID">;
 export type DataVersion = Brand<number, "dataVersion">;
 
+// Module-private keys through which GraphRun reaches into Graph. They are not
+// exported, so these methods stay off the public surface of Graph while
+// remaining callable across the two classes in this module.
+const resolveInGraph = Symbol("resolveInGraph");
+const publishRecords = Symbol("publishRecords");
+const deleteRecord = Symbol("deleteRecord");
+
 export const generateProcID: () => ProcID = idGenerator((x: number) =>
   x as ProcID
 );
@@ -203,42 +210,6 @@ type InvocationRecord = {
 };
 
 /**
- * A single run's resolution session against a graph. Resolutions read only
- * records committed by previous successful runs; records produced by this
- * run are buffered until `commit()` publishes them, so a failed run leaves
- * the previously committed records exactly as they were.
- */
-export type GraphRun = {
-  /**
-   * The version assigned to data produced by this run.
-   */
-  readonly version: DataVersion;
-  /**
-   * Resolves an invocation draft against the recorded history. Assigns data
-   * IDs and versions to unresolved outputs, and reports whether the
-   * invocation is unchanged since its last recorded resolution. It must not
-   * be called after `commit()`.
-   * @param draft The invocation draft to resolve.
-   * @returns The resolved output IDs and versions, and the unchanged flag.
-   */
-  resolve(draft: InvocationDraft): ResolvedInvocation;
-  /**
-   * Commits the records produced by this run's resolutions and drops every
-   * record this run did not resolve. It must be called only after every
-   * invocation of the run finished successfully, so that records always
-   * describe content that was actually produced.
-   */
-  commit(): void;
-  /**
-   * Drops the committed record for a draft whose invocation failed after
-   * possibly writing part of its outputs, so the next submission re-executes
-   * it instead of trusting the record.
-   * @param draft The draft of the failed invocation.
-   */
-  invalidate(draft: InvocationDraft): void;
-};
-
-/**
  * A persistent dependency graph that tracks data identities and versions
  * across runs. It stores no data values; it only answers whether an
  * invocation would produce the same outputs as its last recorded resolution.
@@ -266,39 +237,38 @@ export class Graph {
     this.#runIndex += 1;
     this.#currentDataVersion = runIndexToOutputDataVersion(this.#runIndex);
 
-    const version = this.#currentDataVersion;
-    // The records resolved by this run, keyed by signature so that
-    // identical drafts within one run resolve identically instead of each
-    // minting fresh data IDs.
-    const pending = new HashTable<InvocationSignature, InvocationRecord>(
-      hashInvocationSignature,
-      equalsInvocationSignature,
-    );
-    let committed = false;
-    return {
-      version,
-      resolve: (draft) => {
-        // After commit the pending table is the committed table; a late
-        // resolution would silently corrupt the published records.
-        if (committed) {
-          throw new LogicError("resolve must not be called after commit");
-        }
-        return this.#resolve(draft, version, pending);
-      },
-      commit: () => {
-        if (committed) {
-          return;
-        }
-        committed = true;
+    return new GraphRun(this, this.#currentDataVersion);
+  }
 
-        // The table holds exactly this run's resolutions, so publishing it
-        // wholesale drops every record the run did not resolve.
-        this.#invocations = pending;
-      },
-      invalidate: (draft) => {
-        this.#invocations.delete(signatureOf(draft));
-      },
-    };
+  /**
+   * Resolves a draft on behalf of a run. Module-private; called only through
+   * the `resolveInGraph` symbol by `GraphRun.resolve`.
+   */
+  [resolveInGraph](
+    draft: InvocationDraft,
+    version: DataVersion,
+    pending: HashTable<InvocationSignature, InvocationRecord>,
+  ): ResolvedInvocation {
+    return this.#resolve(draft, version, pending);
+  }
+
+  /**
+   * Publishes a run's pending records as the committed history, dropping the
+   * previous records. Module-private; called only through the
+   * `publishRecords` symbol by `GraphRun.commit`.
+   */
+  [publishRecords](
+    pending: HashTable<InvocationSignature, InvocationRecord>,
+  ): void {
+    this.#invocations = pending;
+  }
+
+  /**
+   * Drops the committed record for a signature. Module-private; called only
+   * through the `deleteRecord` symbol by `GraphRun.invalidate`.
+   */
+  [deleteRecord](signature: InvocationSignature): void {
+    this.#invocations.delete(signature);
   }
 
   /**
@@ -400,6 +370,85 @@ export class Graph {
       outputVersions,
       unchanged: false,
     };
+  }
+}
+
+/**
+ * A single run's resolution session against a graph. Resolutions read only
+ * records committed by previous successful runs; records produced by this
+ * run are buffered until `commit()` publishes them, so a failed run leaves
+ * the previously committed records exactly as they were.
+ */
+export class GraphRun {
+  readonly #graph: Graph;
+  // The records resolved by this run, keyed by signature so that identical
+  // drafts within one run resolve identically instead of each minting fresh
+  // data IDs.
+  readonly #pending: HashTable<InvocationSignature, InvocationRecord>;
+  #committed = false;
+
+  /**
+   * The version assigned to data produced by this run.
+   */
+  readonly version: DataVersion;
+
+  /**
+   * Constructs a run's resolution session. Only `Graph.beginRun` should call
+   * this; it publishes the run's version and the empty pending table.
+   * @param graph The graph the run resolves against.
+   * @param version The version assigned to data produced by the run.
+   */
+  constructor(graph: Graph, version: DataVersion) {
+    this.#graph = graph;
+    this.version = version;
+    this.#pending = new HashTable(
+      hashInvocationSignature,
+      equalsInvocationSignature,
+    );
+  }
+
+  /**
+   * Resolves an invocation draft against the recorded history. Assigns data
+   * IDs and versions to unresolved outputs, and reports whether the
+   * invocation is unchanged since its last recorded resolution. It must not
+   * be called after `commit()`.
+   * @param draft The invocation draft to resolve.
+   * @returns The resolved output IDs and versions, and the unchanged flag.
+   */
+  resolve(draft: InvocationDraft): ResolvedInvocation {
+    // After commit the pending table is the committed table; a late
+    // resolution would silently corrupt the published records.
+    if (this.#committed) {
+      throw new LogicError("resolve must not be called after commit");
+    }
+    return this.#graph[resolveInGraph](draft, this.version, this.#pending);
+  }
+
+  /**
+   * Commits the records produced by this run's resolutions and drops every
+   * record this run did not resolve. It must be called only after every
+   * invocation of the run finished successfully, so that records always
+   * describe content that was actually produced.
+   */
+  commit(): void {
+    if (this.#committed) {
+      return;
+    }
+    this.#committed = true;
+
+    // The table holds exactly this run's resolutions, so publishing it
+    // wholesale drops every record the run did not resolve.
+    this.#graph[publishRecords](this.#pending);
+  }
+
+  /**
+   * Drops the committed record for a draft whose invocation failed after
+   * possibly writing part of its outputs, so the next submission re-executes
+   * it instead of trusting the record.
+   * @param draft The draft of the failed invocation.
+   */
+  invalidate(draft: InvocationDraft): void {
+    this.#graph[deleteRecord](signatureOf(draft));
   }
 }
 

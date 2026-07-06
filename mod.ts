@@ -365,12 +365,7 @@ export function procI<IO, I extends readonly unknown[]>(
     };
 
     const resolveBody = (ctx: ResolveContext): () => Promise<void> => {
-      const input0Count = ctx.inputConsumerCounts.get(input0[handleIdKey]);
-      if (input0Count == null) {
-        throw new LogicError(
-          `the input consumer count for input handle is not calculated: ${input0}`,
-        );
-      }
+      const input0Count = inputConsumerCount(ctx, input0);
 
       if (input0Count === 1) {
         const input0Slot = ctx.plan[internalPlanKey].dataSlots.get(
@@ -560,12 +555,7 @@ export function procNI1<
     };
 
     const resolveBody = (ctx: ResolveContext): () => Promise<void> => {
-      const input0Count = ctx.inputConsumerCounts.get(input0[handleIdKey]);
-      if (input0Count == null) {
-        throw new LogicError(
-          `the input consumer count for input handle is not calculated: ${input0}`,
-        );
-      }
+      const input0Count = inputConsumerCount(ctx, input0);
 
       if (input0Count === 1) {
         const input0Slot = ctx.plan[internalPlanKey].dataSlots.get(
@@ -703,12 +693,7 @@ export function procNIAll<
         const ioInput = ioInputs[i];
         const ioOutput = outputs[i];
 
-        const inputCount = ctx.inputConsumerCounts.get(ioInput[handleIdKey]);
-        if (inputCount == null) {
-          throw new LogicError(
-            `the input consumer count for input handle is not calculated: ${ioInput}`,
-          );
-        }
+        const inputCount = inputConsumerCount(ctx, ioInput);
 
         if (inputCount !== 1) {
           canInPlace = false;
@@ -968,7 +953,27 @@ type InvocationID = Brand<number, "invocationID">;
  */
 interface ResolveContext {
   readonly plan: Plan;
-  readonly inputConsumerCounts: Map<HandleId, number>;
+  readonly consumersByHandle: Map<HandleId, readonly unknown[]>;
+}
+
+/**
+ * An internal function to look up the number of consuming input references
+ * of a handle in the plan as submitted.
+ * @param ctx The resolve context.
+ * @param handle The input handle to count the consumers of.
+ * @returns The number of consuming input references of the handle.
+ */
+function inputConsumerCount(
+  ctx: ResolveContext,
+  handle: UntypedHandle,
+): number {
+  const consumers = ctx.consumersByHandle.get(handle[handleIdKey]);
+  if (consumers == null) {
+    throw new LogicError(
+      `no consumers are recorded for input handle: ${handle}`,
+    );
+  }
+  return consumers.length;
 }
 /**
  * An internal type to represent an invocation. Invocation represents a running procedure or function.
@@ -1316,7 +1321,7 @@ type ExternalIntermediateSlot = {
   setVersion: SetVersionFn | undefined;
   // The version describing the buffer's content after the run, calculated
   // by the incremental pass. When the writing invocation is skipped while
-  // the buffer is stale, this is reset to undefined, because the recorded
+  // the buffer is stale, this stays undefined, because the recorded
   // version does not describe the content and no version is reported.
   resolvedVersion: Version | undefined;
 };
@@ -1644,11 +1649,13 @@ async function runPlan(
   const invocationErrors: unknown[] = [];
   const startedInvocations = new Set<InvocationID>();
   let cleanupError: unknown | undefined;
-  let pruneResult: PruneResult = null;
+  let pruneResult: PruneResult | null = null;
   try {
     const internalPlan = plan[internalPlanKey];
+    const dependencyMaps = buildDependencyMaps(internalPlan.invocations);
+    validatePlanWiring(plan, dependencyMaps);
     if (internalPlan.usesVersions) {
-      pruneResult = pruneUpToDateInvocations(plan);
+      pruneResult = pruneUpToDateInvocations(plan, dependencyMaps);
     } else if (internalPlan.invocations.size > 0) {
       // A fully unversioned plan can never be skipped, so the incremental
       // pass is not worth its cost. Its invocations may still overwrite
@@ -1664,11 +1671,7 @@ async function runPlan(
     }
 
     const runningInvocations = new Set<InvocationID>();
-    const freeInvocations = prepareInvocations(
-      plan,
-      pruneResult?.dependencyMaps ?? null,
-      pruneResult?.submittedConsumerCounts ?? null,
-    );
+    const freeInvocations = prepareInvocations(plan, dependencyMaps);
     prepareDataSlots(plan);
 
     context[stateKey] = "running";
@@ -1713,19 +1716,18 @@ async function runPlan(
         });
     }
 
-    // The scheduling loop drains only invocations whose dependencies
-    // resolve; members of a dependency cycle never become free and would
-    // otherwise be dropped, resolving the run as a silent no-op. Skipped
-    // invocations were removed from the plan by the pruning pass, so with
-    // no errors every remaining invocation must have started.
+    // Dependency cycles are rejected when the dependency maps are built,
+    // and skipped invocations were removed from the plan by the pruning
+    // pass, so with no errors every remaining invocation must have started.
+    // This is a backstop against internal scheduling bugs: an invocation
+    // whose blockers never resolve would otherwise be dropped, resolving
+    // the run as a silent no-op.
     if (
       invocationErrors.length === 0 &&
       startedInvocations.size < internalPlan.invocations.size
     ) {
       invocationErrors.push(
-        new PreconditionError(
-          "the invocations form a dependency cycle and cannot be executed",
-        ),
+        new LogicError("some invocations never became free to run"),
       );
     }
 
@@ -1785,34 +1787,35 @@ async function runPlan(
 /**
  * An internal function to preprocess invocations before execution.
  * @param plan The plan to prepare invocations for.
- * @param dependencyMaps Dependency maps that already describe the plan's
- * invocations, or null to build them here.
- * @param submittedConsumerCounts The consumer counts of the plan as
- * submitted, before pruning, or null when the plan was not pruned.
+ * @param dependencyMaps The dependency maps of the plan as submitted,
+ * before pruning.
  * @returns The prepared invocations.
  */
 function prepareInvocations(
   plan: Plan,
-  dependencyMaps: DependencyMaps | null,
-  submittedConsumerCounts: Map<HandleId, number> | null,
+  dependencyMaps: DependencyMaps,
 ): Invocation[] {
   const freeInvocations: Invocation[] = [];
 
   const invocations = plan[internalPlanKey].invocations;
-  const { producerByHandle, consumersByHandle, blockerCounts } =
-    dependencyMaps ?? buildDependencyMaps(invocations);
+  const { producerByHandle, consumersByHandle } = dependencyMaps;
 
   for (const invocation of invocations.values()) {
+    let numBlockers = 0;
     for (const input of invocation.inputs) {
       const parentInvocation = producerByHandle.get(input[handleIdKey]);
-      if (parentInvocation == null) {
+      // The maps describe the plan as submitted; a producer pruned from the
+      // plan is no blocker, because its surviving consumers read a retained
+      // or caller-managed buffer instead.
+      if (parentInvocation == null || !invocations.has(parentInvocation.id)) {
         continue;
       }
       // Input of the invocation depends on its parent invocation
 
       parentInvocation.next.push(invocation); // allow duplication for proper counting
+      numBlockers++;
     }
-    invocation.numBlockers = blockerCounts.get(invocation.id)!;
+    invocation.numBlockers = numBlockers;
   }
 
   // The in-place/out-of-place variant selection must depend only on the
@@ -1820,9 +1823,7 @@ function prepareInvocations(
   // recorded versions over on the assumption that a re-execution reproduces
   // the recorded content, and the variant can change the produced content
   // (e.g. through the shape of the output buffer).
-  const inputConsumerCounts = submittedConsumerCounts ??
-    consumerCountsOf(consumersByHandle);
-  const resolveContext: ResolveContext = { plan, inputConsumerCounts };
+  const resolveContext: ResolveContext = { plan, consumersByHandle };
   for (const invocation of invocations.values()) {
     invocation.body = invocation.resolveBody(resolveContext);
   }
@@ -1839,12 +1840,12 @@ function prepareInvocations(
 /**
  * An internal type of the dependency structure of a plan's invocations: the
  * producer of each handle, the consumers of each handle (once per input
- * reference), and the number of in-plan blockers per invocation.
+ * reference), and a topological order of the invocations (producers first).
  */
 type DependencyMaps = {
   producerByHandle: Map<HandleId, Invocation>;
   consumersByHandle: Map<HandleId, Invocation[]>;
-  blockerCounts: Map<InvocationID, number>;
+  order: Invocation[];
 };
 
 /**
@@ -1852,6 +1853,7 @@ type DependencyMaps = {
  * invocations.
  * @param invocations The invocations of the plan.
  * @returns The dependency maps of the invocations.
+ * @throws PreconditionError If the invocations form a dependency cycle.
  */
 function buildDependencyMaps(
   invocations: Map<InvocationID, Invocation>,
@@ -1870,14 +1872,9 @@ function buildDependencyMaps(
   }
 
   const consumersByHandle = new Map<HandleId, Invocation[]>();
-  const blockerCounts = new Map<InvocationID, number>();
   for (const invocation of invocations.values()) {
-    let numBlockers = 0;
     for (const input of invocation.inputs) {
       const id = input[handleIdKey];
-      if (producerByHandle.has(id)) {
-        numBlockers++;
-      }
       let consumers = consumersByHandle.get(id);
       if (consumers == null) {
         consumers = [];
@@ -1885,26 +1882,107 @@ function buildDependencyMaps(
       }
       consumers.push(invocation);
     }
-    blockerCounts.set(invocation.id, numBlockers);
   }
 
-  return { producerByHandle, consumersByHandle, blockerCounts };
+  // NB: The traversal is recursive, so the supported plan depth is bounded
+  // by the call stack: a producer-consumer chain of several thousand
+  // invocations overflows it with a RangeError before anything executes.
+  const order: Invocation[] = [];
+  const visited = new Map<InvocationID, "temporary" | "permanent">();
+  const visit = (invocation: Invocation) => {
+    const mark = visited.get(invocation.id);
+    switch (mark) {
+      case "permanent":
+        return;
+      case "temporary":
+        throw new PreconditionError(
+          "the invocations form a dependency cycle and cannot be executed",
+        );
+      case undefined:
+        break;
+      default:
+        unreachable(mark);
+    }
+
+    visited.set(invocation.id, "temporary");
+
+    for (const output of invocation.outputs) {
+      const consumers = consumersByHandle.get(output[handleIdKey]);
+      if (consumers == null) {
+        continue;
+      }
+
+      for (const consumer of consumers) {
+        visit(consumer);
+      }
+    }
+
+    visited.set(invocation.id, "permanent");
+    order.push(invocation);
+  };
+
+  for (const invocation of invocations.values()) {
+    visit(invocation);
+  }
+
+  order.reverse();
+
+  return { producerByHandle, consumersByHandle, order };
 }
 
 /**
- * An internal function to derive per-handle consumer counts from the
- * consumers map.
- * @param consumersByHandle The consumers of each handle.
- * @returns The number of consuming input references per handle.
+ * An internal function to reject invalid wiring before any invocation runs
+ * and before any run state is touched.
+ * @param plan The plan to validate.
+ * @param dependencyMaps The dependency maps of the plan as submitted.
+ * @throws PreconditionError If the plan is wired invalidly.
  */
-function consumerCountsOf(
-  consumersByHandle: Map<HandleId, Invocation[]>,
-): Map<HandleId, number> {
-  const counts = new Map<HandleId, number>();
-  for (const [id, consumers] of consumersByHandle) {
-    counts.set(id, consumers.length);
+function validatePlanWiring(
+  plan: Plan,
+  dependencyMaps: DependencyMaps,
+): void {
+  const internalPlan = plan[internalPlanKey];
+  const { producerByHandle } = dependencyMaps;
+
+  for (const invocation of internalPlan.invocations.values()) {
+    for (const input of invocation.inputs) {
+      const id = input[handleIdKey];
+      const dataSlot = internalPlan.dataSlots.get(id);
+      if (dataSlot == null) {
+        throw new LogicError(`dataSlot not found for handle: ${input}`);
+      }
+
+      const type = dataSlot.type;
+      switch (type) {
+        case "source":
+        case "externalIntermediate":
+          // Caller-managed content is always readable.
+          break;
+        case "destination":
+          throw new PreconditionError("destination handle is read");
+        case "intermediate":
+        case "memoizedIntermediate":
+          if (!producerByHandle.has(id)) {
+            throw new PreconditionError(
+              "intermediate handle is consumed but never produced",
+            );
+          }
+          break;
+        default:
+          return unreachable(type);
+      }
+    }
+
+    for (const output of invocation.outputs) {
+      const dataSlot = internalPlan.dataSlots.get(output[handleIdKey]);
+      if (dataSlot == null) {
+        throw new LogicError(`dataSlot not found for handle: ${output}`);
+      }
+      if (dataSlot.type === "source") {
+        throw new PreconditionError("source handle is written");
+      }
+    }
   }
-  return counts;
 }
 
 /**
@@ -1951,18 +2029,12 @@ function prepareDataSlots(
 /**
  * The graph session of a pruned plan, used by runPlan to commit the records
  * of a successful run or to drop the records of started invocations on
- * failure, plus precomputed structures reusable by prepareInvocations.
+ * failure.
  */
 type PruneResult = {
   graphRun: GraphRun;
   drafts: Map<InvocationID, InvocationDraft>;
-  // The consumer counts of the plan as submitted, for prune-independent
-  // in-place variant selection.
-  submittedConsumerCounts: Map<HandleId, number>;
-  // The dependency maps of the plan, still valid when no invocation was
-  // pruned; null otherwise.
-  dependencyMaps: DependencyMaps | null;
-} | null;
+};
 
 /**
  * An internal function to remove invocations whose outputs are already
@@ -1972,14 +2044,16 @@ type PruneResult = {
  * every output is either a destination already holding the recorded content
  * or an intermediate consumed only by removed invocations. It must be called
  * before prepareInvocations and prepareDataSlots so that blocker counts and
- * reference counts are calculated only on the surviving invocations, while
- * the consumer counts it returns describe the plan as submitted.
+ * reference counts are calculated only on the surviving invocations.
  * @param plan The plan to prune.
- * @returns The graph session, per-invocation drafts, the submitted consumer
- * counts, and dependency maps reusable when nothing was pruned, or null when
- * the plan has no invocations and the graph was not consulted.
+ * @param dependencyMaps The dependency maps of the plan as submitted.
+ * @returns The graph session and per-invocation drafts, or null when the
+ * plan has no invocations and the graph was not consulted.
  */
-function pruneUpToDateInvocations(plan: Plan): PruneResult {
+function pruneUpToDateInvocations(
+  plan: Plan,
+  dependencyMaps: DependencyMaps,
+): PruneResult | null {
   const internalPlan = plan[internalPlanKey];
   const invocations = internalPlan.invocations;
   if (invocations.size === 0) {
@@ -1990,39 +2064,7 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
   const graphRun = graph.beginRun();
   const retainedBuffers = plan.context[retainedBuffersKey];
 
-  // invocation.next and invocation.numBlockers must be left untouched for
-  // prepareInvocations; the shared builder returns fresh local maps.
-  const dependencyMaps = buildDependencyMaps(invocations);
-  const { consumersByHandle } = dependencyMaps;
-  const submittedConsumerCounts = consumerCountsOf(consumersByHandle);
-
-  // Topological order. The wiring order is not guaranteed to be topological
-  // because a destination handle can be consumed by an invocation wired
-  // before its producer. Invocations left unordered (cycles) are never
-  // considered unchanged. Decrements work on a copy so that the dependency
-  // maps stay reusable by prepareInvocations.
-  const remainingBlockers = new Map(dependencyMaps.blockerCounts);
-  const order: Invocation[] = [];
-  for (const invocation of invocations.values()) {
-    if (remainingBlockers.get(invocation.id) === 0) {
-      order.push(invocation);
-    }
-  }
-  for (let i = 0; i < order.length; i++) {
-    for (const output of order[i].outputs) {
-      const consumers = consumersByHandle.get(output[handleIdKey]);
-      if (consumers == null) {
-        continue;
-      }
-      for (const consumer of consumers) {
-        const count = remainingBlockers.get(consumer.id)! - 1;
-        remainingBlockers.set(consumer.id, count);
-        if (count === 0) {
-          order.push(consumer);
-        }
-      }
-    }
-  }
+  const { consumersByHandle, order } = dependencyMaps;
 
   // Forward pass: resolve data IDs and versions in topological order and
   // record which invocations are unchanged.
@@ -2034,8 +2076,6 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
   const drafts = new Map<InvocationID, InvocationDraft>();
 
   for (const invocation of order) {
-    let consultGraph = true;
-
     const inputIDs: DataID[] = [];
     const inputVersions: DataVersion[] = [];
     for (const input of invocation.inputs) {
@@ -2065,23 +2105,18 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
           );
           break;
         case "destination":
+          throw new LogicError("destination handle is read");
         case "externalIntermediate":
-          // A destination or external-intermediate version is a generated
-          // version round-tripped through the caller, used verbatim.
+          // An external-intermediate version is a generated version
+          // round-tripped through the caller, used verbatim.
           inputIDs.push(dataSlot.dataID);
           inputVersions.push(dataSlot.version ?? alwaysChangedDataVersion);
           break;
         case "intermediate":
         case "memoizedIntermediate":
-          // No producer in this plan; the invocation cannot be resolved and
-          // the run will fail at execution time as usual.
-          consultGraph = false;
-          break;
+          throw new LogicError("intermediate handle without any producers");
         default:
           return unreachable(type);
-      }
-      if (!consultGraph) {
-        break;
       }
     }
 
@@ -2094,64 +2129,52 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
       | MemoizedIntermediateSlot
       | null
     )[] = [];
-    if (consultGraph) {
-      for (const output of invocation.outputs) {
-        const id = output[handleIdKey];
-        const dataSlot = internalPlan.dataSlots.get(id);
-        if (dataSlot == null) {
-          throw new LogicError(`dataSlot not found for handle: ${output}`);
-        }
 
-        const type = dataSlot.type;
-        switch (type) {
-          case "source":
-            // Invalid plan; the run will fail at execution time as usual.
-            consultGraph = false;
-            break;
-          case "destination":
-            outputIDs.push(dataSlot.dataID);
-            outputVersions.push(dataSlot.version ?? unknownDataVersion);
-            providerIDs.push(undefinedProviderID);
-            outputSlots.push(dataSlot);
-            break;
-          case "intermediate":
-            outputIDs.push(unresolvedIntermediateDataID);
-            outputVersions.push(unresolvedIntermediateDataVersion);
-            providerIDs.push(graph.resolveDataID(dataSlot.provideKey));
-            outputSlots.push(null);
-            break;
-          case "externalIntermediate":
-            // The buffer has a stable external identity, but its version
-            // acts as a wildcard for the unchanged check: whether the
-            // invocation can be skipped is decided in the backward pass,
-            // where a stale buffer is tolerated when no surviving
-            // invocation reads it.
-            outputIDs.push(dataSlot.dataID);
-            outputVersions.push(unresolvedIntermediateDataVersion);
-            providerIDs.push(unresolvedIntermediateDataID);
-            outputSlots.push(dataSlot);
-            break;
-          case "memoizedIntermediate":
-            // Resolved like an intermediate: identified by its provider,
-            // with a wildcard version. Whether the writing invocation can
-            // be skipped is decided in the backward pass by the presence of
-            // the retained buffer.
-            outputIDs.push(unresolvedIntermediateDataID);
-            outputVersions.push(unresolvedIntermediateDataVersion);
-            providerIDs.push(graph.resolveDataID(dataSlot.provideKey));
-            outputSlots.push(dataSlot);
-            break;
-          default:
-            return unreachable(type);
-        }
-        if (!consultGraph) {
-          break;
-        }
+    for (const output of invocation.outputs) {
+      const id = output[handleIdKey];
+      const dataSlot = internalPlan.dataSlots.get(id);
+      if (dataSlot == null) {
+        throw new LogicError(`dataSlot not found for handle: ${output}`);
       }
-    }
 
-    if (!consultGraph) {
-      continue;
+      const type = dataSlot.type;
+      switch (type) {
+        case "source":
+          throw new LogicError("source handle is written");
+        case "destination":
+          outputIDs.push(dataSlot.dataID);
+          outputVersions.push(dataSlot.version ?? unknownDataVersion);
+          providerIDs.push(undefinedProviderID);
+          outputSlots.push(dataSlot);
+          break;
+        case "externalIntermediate":
+          // The buffer has a stable external identity, but its version
+          // acts as a wildcard for the unchanged check: whether the
+          // invocation can be skipped is decided in the backward pass,
+          // where a stale buffer is tolerated when no surviving
+          // invocation reads it.
+          outputIDs.push(dataSlot.dataID);
+          outputVersions.push(unresolvedIntermediateDataVersion);
+          providerIDs.push(unresolvedIntermediateDataID);
+          outputSlots.push(dataSlot);
+          break;
+        case "intermediate":
+        case "memoizedIntermediate":
+          // Resolved by provider identity with a wildcard version. Whether
+          // the writing invocation can be skipped is decided in the
+          // backward pass: for a memoized intermediate by the presence of
+          // the retained buffer, for a plain intermediate by all of its
+          // consumers being skipped.
+          outputIDs.push(unresolvedIntermediateDataID);
+          outputVersions.push(unresolvedIntermediateDataVersion);
+          providerIDs.push(graph.resolveDataID(dataSlot.provideKey));
+          outputSlots.push(
+            dataSlot.type === "memoizedIntermediate" ? dataSlot : null,
+          );
+          break;
+        default:
+          return unreachable(type);
+      }
     }
 
     const draft: InvocationDraft = {
@@ -2166,13 +2189,15 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
     const resolved = graphRun.resolve(draft);
 
     for (let i = 0; i < invocation.outputs.length; i++) {
-      resolvedRefs.set(invocation.outputs[i][handleIdKey], {
+      const id = invocation.outputs[i][handleIdKey];
+      resolvedRefs.set(id, {
         dataID: resolved.outputIDs[i],
         version: resolved.outputVersions[i],
       });
 
       const outputSlot = outputSlots[i];
       if (outputSlot != null) {
+        // FIXME: restoring the actual data here seems to be ad-hoc.
         if (outputSlot.type === "memoizedIntermediate") {
           outputSlot.resolvedDataID = resolved.outputIDs[i];
           outputSlot.retainedWrap = retainedBuffers.get(
@@ -2189,17 +2214,12 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
     }
   }
 
-  // Backward pass: an unchanged invocation is skipped when every consumer of
-  // each of its intermediate outputs is skipped. Destination outputs need no
-  // condition here: unchanged already implies they hold the recorded
-  // content. An external-intermediate output holding the recorded content
-  // (its claimed version matches the resolved one) needs no condition
-  // either, and neither does a memoized-intermediate output whose buffer is
-  // retained; an unavailable one is tolerated only when every consumer is
-  // skipped.
+  // Backward pass: determine each invocation is skippable in reverse order.
   const skippedInvocations = new Set<InvocationID>();
   for (let i = order.length - 1; i >= 0; i--) {
     const invocation = order[i];
+
+    // Changed invocations are obviously non-skippable.
     if (!unchangedInvocations.has(invocation.id)) {
       continue;
     }
@@ -2209,21 +2229,39 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
       const id = output[handleIdKey];
       const dataSlot = internalPlan.dataSlots.get(id);
       if (dataSlot == null) {
-        continue;
+        throw new LogicError(`dataSlot not found for handle: ${output}`);
       }
-      if (dataSlot.type === "externalIntermediate") {
-        if (
-          dataSlot.version != null &&
-          dataSlot.version === dataSlot.resolvedVersion
-        ) {
+
+      const type = dataSlot.type;
+      switch (type) {
+        case "source":
+          throw new LogicError("source handle is written");
+        case "intermediate":
+          // The consumers of this slot may block the skip.
+          break;
+        case "memoizedIntermediate":
+          // If retainedWrap exists, the version for this slot matches the
+          // previous run and doesn't block the skip.
+          if (dataSlot.retainedWrap != null) {
+            continue;
+          }
+          break;
+        case "destination":
+          // Destination outputs need no condition here: unchanged already
+          // implies they hold the recorded content.
           continue;
-        }
-      } else if (dataSlot.type === "memoizedIntermediate") {
-        if (dataSlot.retainedWrap != null) {
-          continue;
-        }
-      } else if (dataSlot.type !== "intermediate") {
-        continue;
+        case "externalIntermediate":
+          // If the version for this slot matches the previous run and doesn't
+          // block the skip.
+          if (
+            dataSlot.version != null &&
+            dataSlot.version === dataSlot.resolvedVersion
+          ) {
+            continue;
+          }
+          break;
+        default:
+          return unreachable(type);
       }
 
       const consumers = consumersByHandle.get(id);
@@ -2248,6 +2286,7 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
       // claim, not by the recorded version, so no version is reported (see
       // the $e docs).
       for (const output of invocation.outputs) {
+        // FIXME: clearing the resolved version here seems to be ad-hoc.
         const dataSlot = internalPlan.dataSlots.get(output[handleIdKey]);
         if (
           dataSlot != null &&
@@ -2261,9 +2300,10 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
   }
 
   if (skippedInvocations.size === 0) {
-    return { graphRun, drafts, submittedConsumerCounts, dependencyMaps };
+    return { graphRun, drafts };
   }
 
+  // FIXME: modifying data slots here seems to be ad-hoc.
   // Prune the skipped invocations, and remove intermediate slots that no
   // surviving invocation references so that they are not reported as leaks.
   const skippedHandles = new Set<HandleId>();
@@ -2300,7 +2340,7 @@ function pruneUpToDateInvocations(plan: Plan): PruneResult {
     }
   }
 
-  return { graphRun, drafts, submittedConsumerCounts, dependencyMaps: null };
+  return { graphRun, drafts };
 }
 
 /**
